@@ -192,9 +192,9 @@ struct AccountSection: View {
             HStack(spacing: 6) {
                 ForEach(challenge.options.prefix(3)) { option in
                     StatusPill(
-                        text: option.kind == .sms ? "text" : "device",
+                        text: methodLabel(option.kind),
                         tint: methodTint(option),
-                        symbol: option.kind == .sms ? "message.fill" : "iphone"
+                        symbol: methodIcon(option.kind)
                     )
                 }
                 Spacer(minLength: 0)
@@ -214,7 +214,25 @@ struct AccountSection: View {
     }
 
     private func methodTint(_ option: TwoFactorOption) -> Color {
-        option.kind == .sms ? Palette.accent : Palette.muted
+        option.kind == .trustedDevice ? Palette.muted : Palette.accent
+    }
+
+    private func methodLabel(_ kind: TwoFactorOption.Kind) -> String {
+        switch kind {
+        case .sms: return "text"
+        case .voice: return "call"
+        case .email: return "email"
+        case .trustedDevice: return "device"
+        }
+    }
+
+    private func methodIcon(_ kind: TwoFactorOption.Kind) -> String {
+        switch kind {
+        case .sms: return "message.fill"
+        case .voice: return "phone.fill"
+        case .email: return "envelope.fill"
+        case .trustedDevice: return "iphone"
+        }
     }
 
     // MARK: Anisette

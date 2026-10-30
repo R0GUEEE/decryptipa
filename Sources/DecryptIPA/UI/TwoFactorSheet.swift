@@ -108,8 +108,8 @@ struct TwoFactorSheet: View {
                 PrimaryButton(
                     title: requested(for: selected)
                         ? (session.canResend ? "Send another code" : "Code sent")
-                        : (selected.kind == .sms ? "Text me a code" : "Ask my trusted devices"),
-                    icon: selected.kind == .sms ? "message.fill" : "iphone",
+                        : actionTitle(for: selected),
+                    icon: icon(for: selected.kind),
                     busy: sending,
                     enabled: session.canResend
                 ) {
@@ -144,7 +144,7 @@ struct TwoFactorSheet: View {
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(isSelected ? Palette.accent : Palette.muted)
 
-                Image(systemName: option.kind == .sms ? "message.fill" : "iphone")
+                Image(systemName: icon(for: option.kind))
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Palette.accent)
                     .frame(width: 22)
@@ -260,6 +260,24 @@ struct TwoFactorSheet: View {
                 session.cancelChallenge()
                 dismiss()
             }
+        }
+    }
+
+    private func icon(for kind: TwoFactorOption.Kind) -> String {
+        switch kind {
+        case .sms: return "message.fill"
+        case .voice: return "phone.fill"
+        case .email: return "envelope.fill"
+        case .trustedDevice: return "iphone"
+        }
+    }
+
+    private func actionTitle(for option: TwoFactorOption) -> String {
+        switch option.kind {
+        case .sms: return "Text me a code"
+        case .voice: return "Call me with a code"
+        case .email: return "Email me a code"
+        case .trustedDevice: return "Ask my trusted devices"
         }
     }
 
