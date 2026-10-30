@@ -6,3 +6,6 @@ build/*.ipa
 *.xcworkspace
 *.xcodeproj
 .DS_Store
+tools/logic-check/Sources/LogicCheck/MachO.swift
+tools/logic-check/Sources/LogicCheck/Events.swift
+tools/logic-check/.build/

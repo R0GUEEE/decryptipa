@@ -11,6 +11,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  logic:
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Device-free logic self-checks
+        run: sh tools/logic-check/run.sh
+
   ipa:
     runs-on: macos-15
     timeout-minutes: 45
