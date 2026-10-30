@@ -593,6 +593,7 @@ private struct EmptyHint: View {
 
 private extension View {
     func cardSurface() -> some View {
+        self
             .background(Color.white, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
