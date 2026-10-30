@@ -183,8 +183,8 @@ xcodebuild -project DecryptIPA.xcodeproj -scheme DecryptIPA \
   CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
 ```
 
-`.github/workflows/build.yml` does exactly that on `macos-15`, verifies the
-helper is inside the `.app`, packages `Payload/` and uploads
+`.github/workflows/build.yml` uses the `xcode-27` runner (Xcode 27 / iOS SDK 27),
+verifies the helper is inside the `.app`, packages `Payload/` and uploads
 `DecryptIPA-<version>-unsigned.ipa` as an artifact. Sign it with AltStore,
 SideStore, zsign or TrollStore before installing.
 
