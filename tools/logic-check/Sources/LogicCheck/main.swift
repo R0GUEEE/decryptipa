@@ -235,6 +235,11 @@ if let parsed = try? AnisetteHeaders.fromServer(serverJSON) {
 }
 check((try? AnisetteHeaders.fromServer(Data("{}".utf8))) == nil, "missing OTP rejected")
 
+print("App Store credential persistence")
+check(AppStoreCredentialPolicy.rememberedPassword("correct-horse", remember: true) == "correct-horse", "remembered password preserved")
+check(AppStoreCredentialPolicy.rememberedPassword("correct-horse", remember: false) == nil, "unremembered password discarded")
+check(AppStoreCredentialPolicy.rememberedPassword("", remember: true) == nil, "empty password not stored")
+
 print("")
 if failures == 0 {
     print("all checks passed")

@@ -87,6 +87,16 @@ countries).
   and Apple's per-pod redirect is re-posted rather than followed. A `-5000`
   failure retries once.
 
+**Crash fixed in 1.3.6.** The request instrumentation added for the 403 diagnosis
+introduced an accidental recursion: `AppStoreClient.perform(_:)` called itself
+instead of `http.send(_:)`. The first App Store request recursively allocated
+until iOS jetsam-killed the app — matching the sudden 100 MB → 1.4 GB jump in
+the latest `appstore.signin` trace. It now delegates to the HTTP transport, and
+the logic CI contains a source-level regression guard that fails if the request
+funnel is changed back to self-recursion. The same fix also snapshots the
+password before clearing transient state, so **Remember password** actually
+stores the entered password in Keychain after successful sign-in.
+
 Either way the result is the same account material (`dsPersonId`,
 `passwordToken`, `X-Set-Apple-Store-Front`, `pod`), stored in the keychain.
 

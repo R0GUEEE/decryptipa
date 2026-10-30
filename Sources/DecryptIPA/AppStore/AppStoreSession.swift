@@ -307,8 +307,8 @@ final class AppStoreSession: ObservableObject {
         if let data = try? JSONEncoder().encode(account) {
             Keychain.save(data, account: Self.accountKey)
         }
-        if pendingRemember {
-            Keychain.save(Data(passwordToRemember.utf8), account: Self.passwordKey)
+        if let savedPassword = AppStoreCredentialPolicy.rememberedPassword(passwordToRemember, remember: pendingRemember) {
+            Keychain.save(Data(savedPassword.utf8), account: Self.passwordKey)
         } else if !savedPassword.isEmpty {
             Keychain.delete(account: Self.passwordKey)
         }

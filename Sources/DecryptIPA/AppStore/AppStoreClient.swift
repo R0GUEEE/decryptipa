@@ -117,7 +117,7 @@ final class AppStoreClient {
 
     /// Single funnel for every request so the UI can show what Apple answered.
     func perform(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
-        let (data, response) = try await perform(request)
+        let (data, response) = try await http.send(request)
 
         var notes: [String] = []
         if let server = response.value(forHTTPHeaderField: "Server"), !server.isEmpty {
@@ -724,5 +724,14 @@ final class AppStoreHTTP: NSObject, URLSessionTaskDelegate {
         completionHandler: @escaping (URLRequest?) -> Void
     ) {
         completionHandler(nil)
+    }
+}
+
+/// Pure credential persistence policy, kept outside the actor so the logic
+/// harness can guard the opt-in behavior without any Keychain access.
+enum AppStoreCredentialPolicy {
+    static func rememberedPassword(_ password: String, remember: Bool) -> String? {
+        guard remember, !password.isEmpty else { return nil }
+        return password
     }
 }
