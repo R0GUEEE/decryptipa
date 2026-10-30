@@ -289,15 +289,7 @@ extension AppStoreClient {
 
         let client = AppleIDTwoFactor(anisette: anisette, widgetKey: widgetKey, clientID: Self.widgetClientID)
 
-        switch option.kind {
-        case .sms:
-            guard let phoneID = option.phoneID else {
-                throw AppStoreError.signIn("Apple did not give an id for that phone number; pick another option.")
-            }
-            try await client.verifyText(code: code, phoneID: phoneID, sessionID: sessionID, scnt: scnt)
-        case .trustedDevice:
-            try await client.verifyTrustedDevice(code: code, sessionID: sessionID, scnt: scnt)
-        }
+        try await client.verify(code: code, option: option, sessionID: sessionID, scnt: scnt)
 
         // The 2FA cookie is now in the shared cookie store; native auth should
         // return the token instead of another challenge.
@@ -330,15 +322,7 @@ extension AppStoreClient {
 
         let client = AppleIDTwoFactor(anisette: anisette, widgetKey: widgetKey, clientID: Self.widgetClientID)
 
-        switch option.kind {
-        case .sms:
-            guard let phoneID = option.phoneID else {
-                throw AppStoreError.signIn("Apple did not give an id for that phone number.")
-            }
-            try await client.sendText(to: phoneID, sessionID: sessionID, scnt: scnt)
-        case .trustedDevice:
-            try await client.promptTrustedDevice(sessionID: sessionID, scnt: scnt)
-        }
+        try await client.requestCode(for: option, sessionID: sessionID, scnt: scnt)
     }
 
     static func headerDictionary(_ response: HTTPURLResponse) -> [String: String] {

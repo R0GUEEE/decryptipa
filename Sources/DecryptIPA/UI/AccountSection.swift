@@ -14,6 +14,7 @@ struct AccountSection: View {
     @State private var showingSecret = false
     @State private var confirmProvision = false
     @State private var showingImport = false
+    @State private var methodID = ""
 
     var body: some View {
         Card {
@@ -173,31 +174,69 @@ struct AccountSection: View {
                 .foregroundStyle(Palette.warning)
                 .fixedSize(horizontal: false, vertical: true)
 
-            VStack(spacing: 7) {
-                ForEach(challenge.options) { option in
-                    Button {
-                        session.selectOption(option.id)
-                        Task { await session.sendCode(option: option) }
-                    } label: {
-                        HStack(spacing: 10) {
-                            Image(systemName: option.kind == .sms ? "message.fill" : "iphone")
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(Palette.accent)
-                                .frame(width: 26)
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(option.title).font(.caption.weight(.semibold)).foregroundStyle(Palette.ink)
-                                Text(option.detail).font(.caption2).foregroundStyle(Palette.muted)
-                            }
-                            Spacer(minLength: 0)
-                            if session.selectedOptionID == option.id {
-                                Image(systemName: "checkmark.circle.fill").foregroundStyle(Palette.accent)
+            // Explicit method selection: text, voice, email or trusted device.
+            VStack(alignment: .leading, spacing: 6) {
+                Text("AUTHORIZE WITH")
+                    .font(.caption2.weight(.bold))
+                    .tracking(1.0)
+                    .foregroundStyle(Palette.muted)
+
+                Menu {
+                    ForEach(TwoFactorOption.Kind.allCasesForMenu(challenge.options), id: \.self) { kind in
+                        Section(TwoFactorChallenge.groupTitle(for: kind)) {
+                            ForEach(challenge.options.filter { $0.kind == kind }) { option in
+                                Button(option.title) {
+                                    methodID = option.id
+                                    session.selectOption(option.id)
+                                }
                             }
                         }
-                        .padding(10)
-                        .background(Palette.cardRaised, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
-                    .buttonStyle(.plain)
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: icon(for: selectedMethod(in: challenge)?.kind))
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Palette.accent)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(selectedMethod(in: challenge)?.title ?? "Choose a method")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(Palette.ink)
+                            Text(methodDetail(selectedMethod(in: challenge)))
+                                .font(.caption2)
+                                .foregroundStyle(Palette.muted)
+                        }
+                        Spacer(minLength: 0)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(Palette.muted)
+                    }
+                    .padding(11)
+                    .background(Palette.cardRaised, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
+
+                if !challenge.offersEmail {
+                    Text("Apple did not offer an email address for this account; text, voice or a trusted device are available.")
+                        .font(.caption2)
+                        .foregroundStyle(Palette.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            PrimaryButton(
+                title: sendTitle(selectedMethod(in: challenge)),
+                icon: "paperplane",
+                busy: session.busy,
+                enabled: selectedMethod(in: challenge) != nil
+            ) {
+                guard let option = selectedMethod(in: challenge) else { return }
+                session.selectOption(option.id)
+                Task { await session.sendCode(option: option) }
+            }
+
+            if let requested = session.codeRequestedAt {
+                Text("Requested " + requested.formatted(date: .omitted, time: .shortened))
+                    .font(.caption2)
+                    .foregroundStyle(Palette.muted)
             }
 
             FieldShell {
@@ -209,7 +248,7 @@ struct AccountSection: View {
             }
 
             PrimaryButton(
-                title: "Verify code",
+                title: "Verify and sign in",
                 icon: "checkmark.shield",
                 busy: session.busy,
                 enabled: code.trimmingCharacters(in: .whitespaces).count >= 4
@@ -218,12 +257,17 @@ struct AccountSection: View {
             }
 
             HStack {
-                Button("Resend") { Task { await session.sendCode(option: session.selectedOption) } }
-                    .font(.caption2.weight(.semibold))
-                    .buttonStyle(.plain)
-                    .foregroundStyle(session.canResend ? Palette.accent : Palette.muted)
-                    .disabled(!session.canResend || session.busy)
+                Button("Resend") {
+                    guard let option = selectedMethod(in: challenge) else { return }
+                    Task { await session.sendCode(option: option) }
+                }
+                .font(.caption2.weight(.semibold))
+                .buttonStyle(.plain)
+                .foregroundStyle(session.canResend ? Palette.accent : Palette.muted)
+                .disabled(!session.canResend || session.busy)
+
                 Spacer()
+
                 Button("Start over") {
                     code = ""
                     session.cancelChallenge()
@@ -232,8 +276,46 @@ struct AccountSection: View {
                 .buttonStyle(.plain)
                 .foregroundStyle(Palette.muted)
             }
+        }
+        .onAppear { syncMethod(challenge) }
+        .onChange(of: challenge.id) { _, _ in syncMethod(challenge) }
+    }
 
-            EmptyNote(text: "Enter the 6-digit code Apple sent. SMS and trusted-device prompts are supported; Apple's current challenge has no email-code delivery.")
+    private func syncMethod(_ challenge: TwoFactorChallenge) {
+        if !challenge.options.contains(where: { $0.id == methodID }) {
+            methodID = challenge.preferredOption?.id ?? ""
+            if !methodID.isEmpty { session.selectOption(methodID) }
+        }
+    }
+
+    private func selectedMethod(in challenge: TwoFactorChallenge) -> TwoFactorOption? {
+        challenge.options.first(where: { $0.id == methodID })
+            ?? challenge.options.first(where: { $0.id == session.selectedOptionID })
+            ?? challenge.preferredOption
+    }
+
+    private func icon(for kind: TwoFactorOption.Kind?) -> String {
+        guard let kind else { return "questionmark.circle" }
+        switch kind {
+        case .sms: return "message.fill"
+        case .voice: return "phone.fill"
+        case .email: return "envelope.fill"
+        case .trustedDevice: return "iphone"
+        }
+    }
+
+    private func methodDetail(_ option: TwoFactorOption?) -> String {
+        guard let option else { return "Select how Apple should send the code" }
+        return option.detail
+    }
+
+    private func sendTitle(_ option: TwoFactorOption?) -> String {
+        guard let kind = option?.kind else { return "Send code" }
+        switch kind {
+        case .sms: return "Text me a code"
+        case .voice: return "Call me with a code"
+        case .email: return "Email me a code"
+        case .trustedDevice: return "Send a trusted-device prompt"
         }
     }
 

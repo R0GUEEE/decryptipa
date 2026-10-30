@@ -190,6 +190,9 @@ let idmsaJson: [String: Any] = [
         ["id": 1, "numberWithDialCode": "+1 (•••) •••-1234", "obfuscatedNumber": "•••-1234", "pushMode": "sms"],
         ["id": 2, "numberWithDialCode": "+49 (•••) •••-5678", "pushMode": "sms"]
     ],
+    "trustedEmailAddresses": [
+        ["id": 9, "email": "d•••@example.com"]
+    ],
     "trustedDevices": [["id": "dev1", "name": "iPhone"]],
     "securityCode": ["length": 6]
 ]
@@ -201,18 +204,29 @@ let challenge = TwoFactorParsing.challenge(
     mode: .session,
     note: ""
 )
-check(challenge.options.count == 3, "two phone numbers + trusted device = 3 options")
-check(challenge.options.filter { $0.kind == .sms }.count == 2, "both numbers are SMS options")
-check(challenge.preferredOption?.kind == .sms, "SMS preferred over trusted device")
+check(challenge.options.filter { $0.kind == .sms }.count == 2, "both numbers offered as text")
+check(challenge.options.filter { $0.kind == .voice }.count == 2, "both numbers offered as voice")
+check(challenge.options.filter { $0.kind == .email }.count == 1, "trusted email offered")
+check(challenge.options.contains { $0.kind == .trustedDevice }, "trusted device offered")
+check(challenge.preferredOption?.kind == .sms, "text preferred by default")
 check(challenge.preferredOption?.phoneID == 1, "first phone number keeps its id")
+check(challenge.options.first(where: { $0.kind == .voice })?.phoneMode == "voice", "voice options request voice mode")
+check(challenge.options.first(where: { $0.kind == .sms })?.phoneMode == "sms", "text options request sms mode")
+check(challenge.offersEmail, "email availability reported")
 check(challenge.codeLength == 6, "code length read from securityCode")
 check(challenge.sessionID == "sess" && challenge.scnt == "sc", "session headers captured")
 check(challenge.supportsNumberChoice, "session mode reports number choice")
+check(TwoFactorChallenge.groupTitle(for: .voice) == "Voice call", "voice group label")
 
 let minimal: [String: Any] = ["authType": "hsa2"]
 let minimalChallenge = TwoFactorParsing.challenge(json: minimal, headers: [:], email: "x", mode: .session, note: "")
-check(minimalChallenge.options == [.device], "no numbers still offers the trusted device")
+check(minimalChallenge.options == [.device], "no destinations still offers the trusted device")
 check(minimalChallenge.supportsNumberChoice == false, "no number choice without phone data")
+check(minimalChallenge.offersEmail == false, "no email without email data")
+
+let voiceOnly: [String: Any] = ["trustedPhoneNumbers": [["id": 4, "numberWithDialCode": "+44 1234", "pushMode": "voice"]]]
+let voiceChallenge = TwoFactorParsing.challenge(json: voiceOnly, headers: [:], email: "x", mode: .session, note: "")
+check(voiceChallenge.options.contains { $0.kind == .voice }, "voice-only push mode yields a call option")
 
 let stringIDs: [String: Any] = ["trustedPhoneNumbers": [["id": "7", "numberWithDialCode": "+44 1234"]]]
 let stringChallenge = TwoFactorParsing.challenge(json: stringIDs, headers: [:], email: "x", mode: .legacy, note: "")
@@ -220,6 +234,7 @@ check(stringChallenge.options.first?.phoneID == 7, "string phone ids coerced")
 check(stringChallenge.mode == .legacy, "legacy mode preserved")
 check(TwoFactorParsing.isTwoFactor(["failureType": "hsa2"]), "failureType hsa2 detected")
 check(TwoFactorParsing.isTwoFactor(["customerMessage": "Enter your two-factor code"]), "message-based detection")
+check(TwoFactorParsing.isTwoFactor(["trustedEmailAddresses": [["id": 1]]]), "email-only payload detected as 2FA")
 check(!TwoFactorParsing.isTwoFactor(["dsPersonId": "1", "passwordToken": "t"]), "successful payload is not 2FA")
 
 print("Anisette header handling")

@@ -290,7 +290,7 @@ final class AppStoreSession: ObservableObject {
                     anisette: anisette,
                     widgetKey: widgetKey
                 )
-                append("Asked Apple for a \(option.kind == .sms ? "text message" : "trusted-device prompt") → \(option.title)", .command)
+                append("Requested " + option.detail.lowercased() + " → " + option.title, .command)
             } else {
                 // Legacy: re-running the refused sign-in makes Apple re-send the code.
                 do {
@@ -307,9 +307,12 @@ final class AppStoreSession: ObservableObject {
 
             codeRequestedAt = Date()
             waitingForCode = true
-            status = option.kind == .sms
-                ? "Code sent by text to \(option.title)"
-                : "Code requested from your trusted devices"
+            switch option.kind {
+            case .sms: status = "Code texted to " + option.title
+            case .voice: status = "Apple will call " + option.title
+            case .email: status = "Code emailed to " + option.title
+            case .trustedDevice: status = "Code requested from your trusted devices"
+            }
         } catch {
             fail(error)
         }

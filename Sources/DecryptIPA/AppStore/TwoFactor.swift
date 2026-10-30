@@ -5,6 +5,8 @@ import Foundation
 struct TwoFactorOption: Identifiable, Hashable {
     enum Kind: String, Codable {
         case sms
+        case voice
+        case email
         case trustedDevice
     }
 
@@ -13,14 +15,32 @@ struct TwoFactorOption: Identifiable, Hashable {
     let title: String
     let detail: String
     let phoneID: Int?
+    let emailID: Int?
 
-    static func phone(id: Int, number: String, pushMode: String?) -> TwoFactorOption {
+    /// The `mode` Apple's `/verify/phone` expects for this option.
+    var phoneMode: String {
+        kind == .voice ? "voice" : "sms"
+    }
+
+    static func phone(id: Int, number: String, mode: Kind) -> TwoFactorOption {
         TwoFactorOption(
-            id: "phone:\(id)",
-            kind: .sms,
+            id: mode.rawValue + ":phone:" + String(id),
+            kind: mode,
             title: number,
-            detail: pushMode == "sms" ? "Text message" : "Verification code",
-            phoneID: id
+            detail: mode == .voice ? "Voice call" : "Text message",
+            phoneID: id,
+            emailID: nil
+        )
+    }
+
+    static func email(id: Int, address: String) -> TwoFactorOption {
+        TwoFactorOption(
+            id: "email:" + String(id),
+            kind: .email,
+            title: address,
+            detail: "Email code",
+            phoneID: nil,
+            emailID: id
         )
     }
 
@@ -29,15 +49,16 @@ struct TwoFactorOption: Identifiable, Hashable {
         kind: .trustedDevice,
         title: "Trusted device",
         detail: "Show the code on a device signed in to this Apple ID",
-        phoneID: nil
+        phoneID: nil,
+        emailID: nil
     )
 }
 
 enum TwoFactorMode: String {
-    /// Session-based (idmsa): the app can ask Apple to text a specific number and
-    /// verify the code against that number.
+    /// Session-based (idmsa): Apple hands back a session, so a delivery method
+    /// can be chosen and the code verified against that exact destination.
     case session
-    /// Legacy MZFinance: Apple texts the trusted phone, and the code is submitted
+    /// Legacy MZFinance: Apple texts the trusted phone and the code is submitted
     /// together with the password.
     case legacy
 }
@@ -53,20 +74,45 @@ struct TwoFactorChallenge: Identifiable {
     let note: String
 
     var preferredOption: TwoFactorOption? {
-        options.first(where: { $0.kind == .sms }) ?? options.first
+        options.first(where: { $0.kind == .sms })
+            ?? options.first(where: { $0.kind == .email })
+            ?? options.first
     }
 
     var supportsNumberChoice: Bool {
-        mode == .session && options.contains { $0.kind == .sms }
+        mode == .session && options.contains { $0.kind == .sms || $0.kind == .voice }
+    }
+
+    var offersEmail: Bool {
+        options.contains { $0.kind == .email }
+    }
+
+    static func allCasesForMenu(_ options: [TwoFactorOption]) -> [TwoFactorOption.Kind] {
+        let order: [TwoFactorOption.Kind] = [.sms, .voice, .email, .trustedDevice]
+        return order.filter { kind in options.contains { $0.kind == kind } }
+    }
+
+    /// Group label used by the picker.
+    static func groupTitle(for kind: TwoFactorOption.Kind) -> String {
+        switch kind {
+        case .sms: "Text message"
+        case .voice: "Voice call"
+        case .email: "Email code"
+        case .trustedDevice: "Trusted device"
+        }
     }
 }
 
 // MARK: - Response parsing
 
 enum TwoFactorParsing {
-    /// Builds a challenge from `GET /appleauth/auth` (or from the JSON body that
-    /// accompanies a 2FA refusal). Apple is not consistent about nesting, so the
-    /// lookup accepts the top level plus a few known wrappers.
+    /// Builds a challenge from `GET /appleauth/auth` or from the JSON body that
+    /// accompanies a 2FA refusal. Apple is inconsistent about nesting, so the
+    /// top level plus a few known wrappers are accepted.
+    ///
+    /// Phone entries produce both a text and a call option: Apple's
+    /// `/verify/phone` takes `mode: "sms" | "voice"`, and letting the user pick
+    /// is the whole point of this screen.
     static func challenge(
         json: [String: Any],
         headers: [String: String],
@@ -77,26 +123,32 @@ enum TwoFactorParsing {
         let payload = unwrap(json)
 
         var options: [TwoFactorOption] = []
+        var seenPhones = Set<Int>()
+        var seenEmails = Set<Int>()
 
         for entry in phoneList(payload["trustedPhoneNumbers"]) {
-            let phoneID = intValue(entry["id"])
+            guard let phoneID = intValue(entry["id"]), seenPhones.insert(phoneID).inserted else { continue }
             let number = stringValue(entry["numberWithDialCode"])
                 ?? stringValue(entry["obfuscatedNumber"])
                 ?? stringValue(entry["number"])
                 ?? "Trusted phone number"
-            let pushMode = stringValue(entry["pushMode"])
+            let pushMode = (stringValue(entry["pushMode"]) ?? "sms").lowercased()
 
-            if let phoneID {
-                options.append(.phone(id: phoneID, number: number, pushMode: pushMode))
+            if pushMode.contains("voice") {
+                options.append(.phone(id: phoneID, number: number, mode: .voice))
             } else {
-                options.append(TwoFactorOption(
-                    id: "phone:\(number)",
-                    kind: .sms,
-                    title: number,
-                    detail: pushMode == "sms" ? "Text message" : "Verification code",
-                    phoneID: nil
-                ))
+                options.append(.phone(id: phoneID, number: number, mode: .sms))
+                options.append(.phone(id: phoneID, number: number, mode: .voice))
             }
+        }
+
+        for entry in phoneList(payload["trustedEmailAddresses"]) {
+            guard let addressID = intValue(entry["id"]), seenEmails.insert(addressID).inserted else { continue }
+            let address = stringValue(entry["email"])
+                ?? stringValue(entry["obfuscatedEmail"])
+                ?? stringValue(entry["hiddenEmail"])
+                ?? "Trusted email address"
+            options.append(.email(id: addressID, address: address))
         }
 
         let hasTrustedDevices = intValue(payload["noTrustedDevices"]) != 1
@@ -116,7 +168,7 @@ enum TwoFactorParsing {
             scnt: headers["scnt"] ?? headers["X-Apple-Session-Id"],
             options: options,
             codeLength: codeLength,
-            note: note.isEmpty ? "Apple requires two-factor authentication for \(email). authType: \(authType)" : note
+            note: note.isEmpty ? "Apple requires two-factor authentication for " + email + " (authType: " + authType + ")." : note
         )
     }
 
@@ -133,7 +185,7 @@ enum TwoFactorParsing {
         if message.contains("two-factor") || message.contains("two factor") || message.contains("verification code") {
             return true
         }
-        return payload["trustedPhoneNumbers"] != nil
+        return payload["trustedPhoneNumbers"] != nil || payload["trustedEmailAddresses"] != nil
     }
 
     private static func unwrap(_ json: [String: Any]) -> [String: Any] {
@@ -176,9 +228,9 @@ enum TwoFactorParsing {
 
 // MARK: - Session 2FA client (idmsa)
 
-/// Talks to Apple's `appleauth` endpoints, which own the "which number should
-/// the text go to" part of 2FA. The session id + `scnt` come from the refused
-/// sign-in attempt; everything here needs anisette attestation to be accepted.
+/// Talks to Apple's `appleauth` endpoints, which own delivery and verification
+/// of two-factor codes. The session id + `scnt` come from the refused sign-in
+/// attempt; everything here needs anisette attestation to be accepted.
 struct AppleIDTwoFactor {
     static let base = "https://idmsa.apple.com/appleauth/auth"
 
@@ -187,10 +239,6 @@ struct AppleIDTwoFactor {
     /// sets one in Advanced settings.
     let widgetKey: String
     let clientID: String
-
-    struct Session {
-        var headers: [String: String]
-    }
 
     func sessionState(email: String, sessionID: String, scnt: String) async throws -> TwoFactorChallenge {
         guard let url = URL(string: Self.base) else { throw appFailure("Bad auth URL.") }
@@ -201,7 +249,7 @@ struct AppleIDTwoFactor {
 
         let (data, response) = try await send(request)
         guard let http = response, (200..<300).contains(http.statusCode) else {
-            throw appFailure("Apple rejected the 2FA session lookup (HTTP \(response?.statusCode ?? -1)): \(snippet(data))")
+            throw appFailure("Apple rejected the 2FA session lookup (HTTP " + String(response?.statusCode ?? -1) + "): " + snippet(data))
         }
 
         return TwoFactorParsing.challenge(
@@ -213,9 +261,44 @@ struct AppleIDTwoFactor {
         )
     }
 
-    /// `PUT /auth/verify/phone {"phoneNumber":{"id":N},"mode":"sms"}` — Apple
-    /// texts the code to that number.
-    func sendText(to phoneID: Int, sessionID: String, scnt: String) async throws {
+    /// Delivers a code for the chosen option.
+    ///  * phone → `PUT /verify/phone` with mode `sms` or `voice`
+    ///  * email → `PUT /verify/email`
+    ///  * device → `PUT /verify/trusteddevice`
+    func requestCode(for option: TwoFactorOption, sessionID: String, scnt: String) async throws {
+        switch option.kind {
+        case .sms, .voice:
+            guard let phoneID = option.phoneID else { throw appFailure("Apple did not return an id for that phone number.") }
+            try await verifyPhone(phoneID: phoneID, mode: option.phoneMode, sessionID: sessionID, scnt: scnt)
+
+        case .email:
+            guard let emailID = option.emailID else { throw appFailure("Apple did not return an id for that email address.") }
+            try await verifyEmail(emailID: emailID, sessionID: sessionID, scnt: scnt)
+
+        case .trustedDevice:
+            try await promptTrustedDevice(sessionID: sessionID, scnt: scnt)
+        }
+    }
+
+    /// Verifies a code against the chosen destination.
+    func verify(code: String, option: TwoFactorOption, sessionID: String, scnt: String) async throws {
+        switch option.kind {
+        case .sms, .voice:
+            guard let phoneID = option.phoneID else { throw appFailure("Apple did not return an id for that phone number.") }
+            try await verifyPhoneCode(code: code, phoneID: phoneID, mode: option.phoneMode, sessionID: sessionID, scnt: scnt)
+
+        case .email:
+            guard let emailID = option.emailID else { throw appFailure("Apple did not return an id for that email address.") }
+            try await verifyEmailCode(code: code, emailID: emailID, sessionID: sessionID, scnt: scnt)
+
+        case .trustedDevice:
+            try await verifyTrustedDeviceCode(code: code, sessionID: sessionID, scnt: scnt)
+        }
+    }
+
+    // MARK: Phone
+
+    func verifyPhone(phoneID: Int, mode: String, sessionID: String, scnt: String) async throws {
         guard let url = URL(string: Self.base + "/verify/phone") else { throw appFailure("Bad auth URL.") }
         var request = URLRequest(url: url)
         request.httpMethod = "PUT"
@@ -224,32 +307,17 @@ struct AppleIDTwoFactor {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.httpBody = try JSONSerialization.data(withJSONObject: [
             "phoneNumber": ["id": phoneID],
-            "mode": "sms"
+            "mode": mode
         ])
 
         let (data, response) = try await send(request)
         guard let http = response, (200..<300).contains(http.statusCode) else {
-            throw appFailure("Apple refused to send a text to that number (HTTP \(response?.statusCode ?? -1)): \(snippet(data))")
+            let channel = mode == "voice" ? "call" : "text"
+            throw appFailure("Apple refused to send a " + channel + " to that number (HTTP " + String(response?.statusCode ?? -1) + "): " + snippet(data))
         }
     }
 
-    /// `PUT /auth/verify/trusteddevice` — ask Apple to push the prompt to the
-    /// trusted devices.
-    func promptTrustedDevice(sessionID: String, scnt: String) async throws {
-        guard let url = URL(string: Self.base + "/verify/trusteddevice") else { throw appFailure("Bad auth URL.") }
-        var request = URLRequest(url: url)
-        request.httpMethod = "PUT"
-        applySession(to: &request, sessionID: sessionID, scnt: scnt)
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-
-        let (data, response) = try await send(request)
-        guard let http = response, (200..<300).contains(http.statusCode) else {
-            throw appFailure("Apple refused to notify the trusted devices (HTTP \(response?.statusCode ?? -1)): \(snippet(data))")
-        }
-    }
-
-    /// `POST /auth/verify/phone/securitycode` — verify an SMS code.
-    func verifyText(code: String, phoneID: Int, sessionID: String, scnt: String) async throws {
+    func verifyPhoneCode(code: String, phoneID: Int, mode: String, sessionID: String, scnt: String) async throws {
         guard let url = URL(string: Self.base + "/verify/phone/securitycode") else { throw appFailure("Bad auth URL.") }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -259,41 +327,84 @@ struct AppleIDTwoFactor {
         request.httpBody = try JSONSerialization.data(withJSONObject: [
             "securityCode": ["code": code],
             "phoneNumber": ["id": phoneID],
-            "mode": "sms"
+            "mode": mode
         ])
 
         let (data, response) = try await send(request)
-        try validateVerification(data: data, response: response, method: "text message")
+        try validateVerification(data: data, response: response, method: mode == "voice" ? "voice call" : "text message")
     }
 
-    /// `POST /auth/verify/trusteddevice/securitycode`.
-    func verifyTrustedDevice(code: String, sessionID: String, scnt: String) async throws {
-        guard let url = URL(string: Self.base + "/verify/trusteddevice/securitycode") else { throw appFailure("Bad auth URL.") }
+    // MARK: Email
+
+    func verifyEmail(emailID: Int, sessionID: String, scnt: String) async throws {
+        guard let url = URL(string: Self.base + "/verify/email") else { throw appFailure("Bad auth URL.") }
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        applySession(to: &request, sessionID: sessionID, scnt: scnt)
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["email": ["id": emailID]])
+
+        let (data, response) = try await send(request)
+        guard let http = response, (200..<300).contains(http.statusCode) else {
+            throw appFailure("Apple refused to email that address (HTTP " + String(response?.statusCode ?? -1) + "): " + snippet(data))
+        }
+    }
+
+    func verifyEmailCode(code: String, emailID: Int, sessionID: String, scnt: String) async throws {
+        guard let url = URL(string: Self.base + "/verify/email/securitycode") else { throw appFailure("Bad auth URL.") }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         applySession(to: &request, sessionID: sessionID, scnt: scnt)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.httpBody = try JSONSerialization.data(withJSONObject: [
-            "securityCode": ["code": code]
+            "securityCode": ["code": code],
+            "email": ["id": emailID]
         ])
+
+        let (data, response) = try await send(request)
+        try validateVerification(data: data, response: response, method: "email")
+    }
+
+    // MARK: Trusted device
+
+    func promptTrustedDevice(sessionID: String, scnt: String) async throws {
+        guard let url = URL(string: Self.base + "/verify/trusteddevice") else { throw appFailure("Bad auth URL.") }
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        applySession(to: &request, sessionID: sessionID, scnt: scnt)
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+        let (data, response) = try await send(request)
+        guard let http = response, (200..<300).contains(http.statusCode) else {
+            throw appFailure("Apple refused to notify the trusted devices (HTTP " + String(response?.statusCode ?? -1) + "): " + snippet(data))
+        }
+    }
+
+    func verifyTrustedDeviceCode(code: String, sessionID: String, scnt: String) async throws {
+        guard let url = URL(string: Self.base + "/verify/trusteddevice/securitycode") else { throw appFailure("Bad auth URL.") }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        applySession(to: &request, sessionID: sessionID, scnt: scnt)
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["securityCode": ["code": code]])
 
         let (data, response) = try await send(request)
         try validateVerification(data: data, response: response, method: "trusted device")
     }
 
+    // MARK: Plumbing
+
     private func validateVerification(data: Data, response: HTTPURLResponse?, method: String) throws {
         guard let http = response else {
-            throw appFailure("No response from Apple while verifying the \(method) code.")
+            throw appFailure("No response from Apple while verifying the " + method + " code.")
         }
 
         let json = TwoFactorParsing.jsonDictionary(data)
+        if (200..<300).contains(http.statusCode), !TwoFactorParsing.isTwoFactor(json) { return }
 
-        if (200..<300).contains(http.statusCode), !TwoFactorParsing.isTwoFactor(json) {
-            return
-        }
-
-        // Apple answers with 400/409 and a service error when the code is wrong.
         let serviceErrors = (json["serviceErrors"] as? [[String: Any]]) ?? []
         let message = serviceErrors
             .compactMap { TwoFactorParsing.stringValue($0["message"]) }
@@ -301,14 +412,13 @@ struct AppleIDTwoFactor {
             ?? TwoFactorParsing.stringValue(json["customerMessage"])
             ?? snippet(data)
 
-        throw appFailure("Apple did not accept the \(method) code (HTTP \(http.statusCode)): \(message)")
+        throw appFailure("Apple did not accept the " + method + " code (HTTP " + String(http.statusCode) + "): " + message)
     }
 
     private func applySession(to request: inout URLRequest, sessionID: String, scnt: String) {
         anisette.apply(to: &request)
         request.setValue(sessionID, forHTTPHeaderField: "X-Apple-ID-Session-Id")
         request.setValue(scnt, forHTTPHeaderField: "scnt")
-        request.setValue("1", forHTTPHeaderField: "X-Apple-I-FD-Client-Info")
         if !widgetKey.isEmpty {
             request.setValue(widgetKey, forHTTPHeaderField: "X-Apple-Widget-Key")
         }
@@ -329,7 +439,7 @@ struct AppleIDTwoFactor {
             let (data, response) = try await URLSession.shared.data(for: request)
             return (data, response as? HTTPURLResponse)
         } catch {
-            throw appFailure("Network error talking to Apple ID: \(error.localizedDescription)")
+            throw appFailure("Network error talking to Apple ID: " + error.localizedDescription)
         }
     }
 
