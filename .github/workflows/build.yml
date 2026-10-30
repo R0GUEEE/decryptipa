@@ -59,6 +59,10 @@ jobs:
         run: |
           APP="build/DerivedData/Build/Products/Release-iphoneos/DecryptIPA.app"
           test -d "$APP"
+          echo "--- bundle tree ---"
+          find "$APP" -maxdepth 2 | sort | head -40
+          echo "--- resources dir ---"
+          ls -la "$APP" | head -30
           test -f "$APP/DecryptIPA"
           test -f "$APP/ipadecrypt-helper-arm64"
           file "$APP/ipadecrypt-helper-arm64" | grep -q "Mach-O 64-bit arm64"
