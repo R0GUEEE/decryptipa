@@ -40,6 +40,10 @@ DecryptIPA (this app) ──ssh/sftp──▶ jailbroken iPhone
   `LC_ENCRYPTION_INFO(_64)` and reports `cryptid != 0` leftovers.
 * **Library** — outputs land in `Documents/Decrypted`, exposed through the
   Files app (`UIFileSharingEnabled`) and shareable from the Library tab.
+* **Modern workflow UI** — the Decrypt tab is a lightweight card-based
+  `ScrollView` (device → source → progress → options → action), not a nested
+  `Form`/`Section` tree. The action button is explicit about why it is disabled;
+  advanced install/decrypt toggles live in a collapsed Options card.
 
 Three input modes:
 
