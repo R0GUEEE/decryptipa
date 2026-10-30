@@ -486,10 +486,40 @@ struct SignInView: View {
 struct AnisetteSettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var session: AppStoreSession
+    @State private var showingProvisionConsent = false
 
     var body: some View {
         NavigationStack {
             Form {
+                Section {
+                    LabeledValue(label: "Setup", value: session.automaticAnisetteReady ? "Ready" : "Not configured")
+                    TextField("https://ani.sidestore.io", text: $session.automaticAnisetteServer)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.URL)
+                    Button {
+                        showingProvisionConsent = true
+                    } label: {
+                        HStack {
+                            if session.busy { ProgressView().controlSize(.small) }
+                            Label(session.automaticAnisetteReady ? "Refresh automatic setup" : "Set up automatically", systemImage: "wand.and.stars")
+                        }
+                    }
+                    .disabled(session.busy)
+                    if session.automaticAnisetteReady {
+                        Button("Remove saved automatic setup", role: .destructive) {
+                            session.removeAutomaticAnisette()
+                        }
+                    }
+                    if let error = session.error {
+                        Text(error).font(.caption).foregroundStyle(.orange)
+                    }
+                } header: {
+                    Text("Automatic Anisette (RemoteAnisette)")
+                } footer: {
+                    Text("One-time provisioning stores a per-device Anisette identity and ADI blob in Keychain; sign-in can then fetch rotating headers automatically. The selected HTTPS server participates in the Apple provisioning exchange and can observe its protocol traffic/device identifier. Do not use a server you do not trust. Your Apple ID password is not entered into this provisioning step.")
+                }
+
                 Section {
                     TextField("https://ani.example.com", text: $session.anisetteURL)
                         .textInputAutocapitalization(.never)
@@ -500,9 +530,9 @@ struct AnisetteSettingsView: View {
                         .autocorrectionDisabled()
                     SecureField("Basic auth password (optional)", text: $session.anisettePassword)
                 } header: {
-                    Text("Anisette server")
+                    Text("Existing anisette-v3 endpoint")
                 } footer: {
-                    Text("Any anisette-v3 compatible server works: GET returns a JSON object with X-Apple-I-MD, X-Apple-I-MD-M and friends. With a provider configured the app uses Apple's native sign-in, which is what allows choosing a trusted phone number for the text message. Leave empty to use the classic App Store sign-in.")
+                    Text("Optional legacy integration: a GET endpoint returning X-Apple-I-MD / X-Apple-I-MD-M JSON headers. When configured, it takes precedence over the saved RemoteAnisette identity.")
                 }
 
                 Section {
@@ -527,7 +557,21 @@ struct AnisetteSettingsView: View {
                     Button("Done") { dismiss() }
                 }
             }
+            .confirmationDialog(
+                "Provision Anisette with this server?",
+                isPresented: $showingProvisionConsent,
+                titleVisibility: .visible
+            ) {
+                Button("Agree & Set Up") {
+                    Task { await session.configureAutomaticAnisette() }
+                }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                let host = URL(string: session.automaticAnisetteServer)?.host ?? session.automaticAnisetteServer
+                Text("The server at " + host + " will participate in the Anisette provisioning handshake. Its operator can see the device identity and protocol traffic. Continue only if you trust this server.")
+            }
         }
+        .onAppear { Diagnostics.setScreen("appstore.anisette") }
     }
 }
 

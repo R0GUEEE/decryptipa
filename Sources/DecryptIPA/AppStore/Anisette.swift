@@ -1,4 +1,5 @@
 import Foundation
+import RemoteAnisette
 
 /// Headers Apple's modern endpoints (auth/v1/native/fast, idmsa) require on top
 /// of the classic Configurator ones. The `X-Apple-I-MD*` family is device
@@ -30,6 +31,22 @@ struct AnisetteHeaders {
             "X-Apple-I-SRL-NO": "0",
             "X-Apple-I-MD-RINFO": "17106176"
         ])
+    }
+
+    /// Validates and normalizes headers from RemoteAnisette or a user server.
+    /// RemoteAnisette emits `X-Apple-Client-Time`; native App Store auth may also
+    /// require `X-Apple-I-Client-Time`, so provide both aliases when available.
+    static func validated(_ source: [String: String]) throws -> AnisetteHeaders {
+        var values = source
+        if values["X-Apple-I-Client-Time"] == nil,
+           let clientTime = values["X-Apple-Client-Time"] {
+            values["X-Apple-I-Client-Time"] = clientTime
+        }
+        guard values["X-Apple-I-MD"]?.isEmpty == false,
+              values["X-Apple-I-MD-M"]?.isEmpty == false else {
+            throw appFailure("Anisette headers are missing X-Apple-I-MD or X-Apple-I-MD-M.")
+        }
+        return AnisetteHeaders(values: values)
     }
 
     /// Parses the JSON an anisette server returns. Both shapes in the wild are
@@ -72,7 +89,7 @@ struct AnisetteHeaders {
             throw appFailure("The anisette server response is missing X-Apple-I-MD / X-Apple-I-MD-M.")
         }
 
-        return AnisetteHeaders(values: values)
+        return try AnisetteHeaders.validated(values)
     }
 }
 

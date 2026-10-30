@@ -234,6 +234,15 @@ if let parsed = try? AnisetteHeaders.fromServer(serverJSON) {
     check(false, "server anisette JSON parsed")
 }
 check((try? AnisetteHeaders.fromServer(Data("{}".utf8))) == nil, "missing OTP rejected")
+let remoteHeaders = try? AnisetteHeaders.validated([
+    "X-Apple-I-MD": "otp",
+    "X-Apple-I-MD-M": "machine",
+    "X-Apple-Client-Time": "2026-10-30T12:00:00Z",
+    "X-Mme-Client-Info": "Anisette test client"
+])
+check(remoteHeaders?.values["X-Apple-I-Client-Time"] == "2026-10-30T12:00:00Z", "RemoteAnisette client-time header normalized")
+check(remoteHeaders?.values["X-Mme-Client-Info"] == "Anisette test client", "RemoteAnisette extra headers preserved")
+check((try? AnisetteHeaders.validated(["X-Apple-I-MD": "only-otp"])) == nil, "incomplete automatic anisette rejected")
 
 print("App Store credential persistence")
 check(AppStoreCredentialPolicy.rememberedPassword("correct-horse", remember: true) == "correct-horse", "remembered password preserved")

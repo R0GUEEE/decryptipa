@@ -209,9 +209,12 @@ SideStore, zsign or TrollStore before installing.
 
 Dependencies: [Citadel](https://github.com/orlandos-nl/Citadel) (SwiftNIO SSH
 client + SFTP), [swift-crypto](https://github.com/apple/swift-crypto) (ed25519
-key parsing, SHA-256 of the helper), and
+key parsing, SHA-256 of the helper),
+[RemoteAnisette](https://github.com/SideStore/RemoteAnisette) (consent-based
+Anisette-v3 provisioning/client, pinned to a reviewed revision), and
 [ZIPFoundation](https://github.com/weichsel/ZIPFoundation) (IPA inspection,
-patching, verification).
+patching, verification). Automatic Anisette setup is an explicit user action;
+it does not contact a provider until the user approves the in-app consent dialog.
 
 ## Crash reports
 

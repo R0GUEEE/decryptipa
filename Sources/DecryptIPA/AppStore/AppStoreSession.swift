@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import RemoteAnisette
 
 /// Account + download state for the App Store flow, including the Apple ID
 /// sign-in / two-factor state machine.
@@ -39,7 +40,12 @@ final class AppStoreSession: ObservableObject {
     @Published var anisettePassword: String {
         didSet { Keychain.save(Data(anisettePassword.utf8), account: Self.anisettePasswordKey) }
     }
+    @Published var automaticAnisetteServer: String {
+        didSet { defaults.set(automaticAnisetteServer, forKey: Self.automaticAnisetteServerKey) }
+    }
+    @Published private(set) var automaticAnisetteReady = false
 
+    private var automaticAnisetteUser: AnisetteUser? = nil
     private static let accountKey = "appstore.account"
     private static let passwordKey = "appstore.password"
     private static let guidKey = "appstore.guid"
@@ -47,6 +53,8 @@ final class AppStoreSession: ObservableObject {
     private static let anisetteKey = "appstore.anisette.url"
     private static let anisetteUserKey = "appstore.anisette.user"
     private static let anisettePasswordKey = "appstore.anisette.password"
+    private static let automaticAnisetteServerKey = "appstore.anisette.auto.server"
+    private static let automaticAnisetteUserKey = "appstore.anisette.auto.user"
     private static let widgetKeyKey = "appstore.widgetkey"
 
     private let guid: String
@@ -90,10 +98,19 @@ final class AppStoreSession: ObservableObject {
         self.widgetKey = defaults.string(forKey: Self.widgetKeyKey) ?? ""
         self.anisettePassword = Keychain.load(account: Self.anisettePasswordKey)
             .flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        self.automaticAnisetteServer = defaults.string(forKey: Self.automaticAnisetteServerKey)
+            ?? "https://ani.sidestore.io"
+        self.automaticAnisetteUser = nil
 
         self.client = AppStoreClient(guid: guid)
 
-        Diagnostics.breadcrumb("appstore session initialised")
+        if let stored = Keychain.load(account: Self.automaticAnisetteUserKey),
+           let user = try? JSONDecoder().decode(AnisetteUser.self, from: stored) {
+            self.automaticAnisetteUser = user
+            self.automaticAnisetteReady = true
+        }
+
+        Diagnostics.breadcrumb("appstore session initialised · automatic anisette=" + String(automaticAnisetteReady))
         if let data = Keychain.load(account: Self.accountKey),
            let saved = try? JSONDecoder().decode(AppStoreAccount.self, from: data) {
             account = saved
@@ -103,7 +120,9 @@ final class AppStoreSession: ObservableObject {
 
     var deviceGUID: String { guid }
     var isSignedIn: Bool { account != nil }
-    var usesAnisette: Bool { !anisetteURL.trimmingCharacters(in: .whitespaces).isEmpty }
+    var usesAnisette: Bool {
+        !anisetteURL.trimmingCharacters(in: .whitespaces).isEmpty || automaticAnisetteReady
+    }
 
     var savedPassword: String {
         guard let data = Keychain.load(account: Self.passwordKey),
@@ -371,24 +390,81 @@ final class AppStoreSession: ObservableObject {
 
     // MARK: - Anisette
 
-    private func anisetteHeaders() async -> AnisetteHeaders? {
-        guard usesAnisette else { return nil }
-        let provider = AnisetteProvider(
-            endpoint: anisetteURL,
-            username: anisetteUser,
-            password: anisettePassword,
-            guid: guid
-        )
+    /// Provisions a RemoteAnisette user against the selected Anisette-v3 server,
+    /// validates one header response, then stores device identity and the ADI
+    /// personalization blob in Keychain for later sign-ins.
+    func configureAutomaticAnisette() async {
+        let address = automaticAnisetteServer.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: address), url.scheme?.lowercased() == "https", url.host != nil else {
+            error = "Enter a valid HTTPS Anisette-v3 server URL."
+            return
+        }
+
+        busy = true
+        error = nil
+        status = "Provisioning Anisette with " + (url.host ?? address) + "…"
+        Diagnostics.breadcrumb("anisette provisioning started · host=" + (url.host ?? "?"))
+        defer { busy = false }
+
         do {
-            let headers = try await provider.headers()
-            var values = headers.values
+            let user = try await AnisetteUser.provision(url: url)
+            let headers = try AnisetteHeaders.validated(await user.fetchHeaders())
+            guard let data = try? JSONEncoder().encode(user) else {
+                throw appFailure("Could not store the Anisette device state.")
+            }
+
+            Keychain.save(data, account: Self.automaticAnisetteUserKey)
+            automaticAnisetteUser = user
+            automaticAnisetteReady = true
+            status = "Anisette is ready for Apple sign-in"
+            append("Anisette provisioned from " + (url.host ?? address) + "; headers validated (OTP " + String(headers.values["X-Apple-I-MD"]?.count ?? 0) + " chars).", .success)
+            Diagnostics.breadcrumb("anisette provisioning completed · host=" + (url.host ?? "?"))
+        } catch {
+            let message = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+            self.error = "Anisette setup failed: " + message
+            status = ""
+            append(self.error ?? "Anisette setup failed", .error)
+            Diagnostics.breadcrumb("anisette provisioning failed · " + message)
+        }
+    }
+
+    func removeAutomaticAnisette() {
+        automaticAnisetteUser = nil
+        automaticAnisetteReady = false
+        Keychain.delete(account: Self.automaticAnisetteUserKey)
+        status = "Automatic Anisette setup removed"
+        append(status, .info)
+    }
+
+    private func anisetteHeaders() async -> AnisetteHeaders? {
+        do {
+            let providerHeaders: AnisetteHeaders
+            let manualEndpoint = anisetteURL.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            if !manualEndpoint.isEmpty {
+                let provider = AnisetteProvider(
+                    endpoint: manualEndpoint,
+                    username: anisetteUser,
+                    password: anisettePassword,
+                    guid: guid
+                )
+                providerHeaders = try await provider.headers()
+            } else if let automaticAnisetteUser {
+                providerHeaders = try AnisetteHeaders.validated(await automaticAnisetteUser.fetchHeaders())
+            } else {
+                return nil
+            }
+
+            var values = providerHeaders.values
             for (key, value) in AnisetteHeaders.local(guid: guid).values where values[key] == nil {
                 values[key] = value
             }
-            append("Anisette: X-Apple-I-MD \(values["X-Apple-I-MD"]?.count ?? 0) chars.", .debug)
+            append("Anisette: X-Apple-I-MD " + String(values["X-Apple-I-MD"]?.count ?? 0) + " chars.", .debug)
             return AnisetteHeaders(values: values)
         } catch {
-            append((error as? LocalizedError)?.errorDescription ?? "\(error)", .error)
+            let message = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+            append(message, .error)
+            Diagnostics.breadcrumb("anisette fetch failed · " + message)
             return nil
         }
     }
@@ -497,8 +573,9 @@ final class AppStoreSession: ObservableObject {
         var lines = ["DecryptIPA App Store diagnostics"]
         lines.append("device GUID: \(guid)")
         lines.append("storefront: \(country)")
-        lines.append("anisette: \(usesAnisette ? anisetteURL : "none")")
-        lines.append("mode: \(usesAnisette ? "native" : "legacy")")
+        lines.append("anisette manual endpoint: " + (anisetteURL.isEmpty ? "none" : anisetteURL))
+        lines.append("anisette automatic: " + (automaticAnisetteReady ? automaticAnisetteServer : "not configured"))
+        lines.append("mode: " + (usesAnisette ? "native" : "legacy"))
         lines.append("")
         lines.append("— requests —")
         for exchange in client.exchanges {
