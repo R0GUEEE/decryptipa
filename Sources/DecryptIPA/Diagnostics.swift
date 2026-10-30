@@ -92,10 +92,20 @@ enum Diagnostics {
     static var logDirectory: URL { diagnosticsLogDirectory() }
 
     static func install() {
+        archivePreviousRun()
+
         let path = diagnosticsLogDirectory().appendingPathComponent("crash-signal.txt").path
         diagnosticsSignalFD = open(path, O_WRONLY | O_CREAT | O_APPEND, 0o644)
 
         NSSetUncaughtExceptionHandler(diagnosticsExceptionHandler)
+
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            Diagnostics.breadcrumb("memory warning")
+        }
 
         for value in [SIGABRT, SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGTRAP] as [Int32] {
             signal(value, diagnosticsSignalHandler)
@@ -105,6 +115,64 @@ enum Diagnostics {
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
         breadcrumb("launch \(version) (\(build)) · iOS \(UIDevice.current.systemVersion) · \(UIDevice.current.model)")
         flush()
+    }
+
+    /// Moves the last run's breadcrumbs into `Logs/runs/` so a relaunch after a
+    /// crash cannot destroy the trail that explains it. Keeps the ten newest.
+    private static func archivePreviousRun() {
+        let fileManager = FileManager.default
+        let runs = diagnosticsLogDirectory().appendingPathComponent("runs", isDirectory: true)
+        try? fileManager.createDirectory(at: runs, withIntermediateDirectories: true)
+
+        let current = diagnosticsLogDirectory().appendingPathComponent("last-run.txt")
+        guard fileManager.fileExists(atPath: current.path) else { return }
+
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        let destination = runs.appendingPathComponent("run-\(formatter.string(from: Date())).txt")
+        try? fileManager.moveItem(at: current, to: destination)
+
+        let existing = (try? fileManager.contentsOfDirectory(
+            at: runs,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        )) ?? []
+
+        let sorted = existing.sorted { left, right in
+            let l = (try? left.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            let r = (try? right.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            return l > r
+        }
+
+        for url in sorted.dropFirst(10) {
+            try? fileManager.removeItem(at: url)
+        }
+    }
+
+    /// Breadcrumb files from earlier launches, newest first.
+    static func previousRuns() -> [URL] {
+        let runs = diagnosticsLogDirectory().appendingPathComponent("runs", isDirectory: true)
+        let files = (try? FileManager.default.contentsOfDirectory(
+            at: runs,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        )) ?? []
+
+        return files.sorted { left, right in
+            let l = (try? left.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            let r = (try? right.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            return l > r
+        }
+    }
+
+    /// Last line of a run file — the step that run stopped at.
+    static func lastStep(of url: URL) -> String {
+        let text = text(of: url)
+        return text
+            .split(separator: "\n")
+            .last
+            .map(String.init)?
+            .trimmingCharacters(in: .whitespaces) ?? ""
     }
 
     static func breadcrumb(_ text: String) {
@@ -161,7 +229,7 @@ enum Diagnostics {
     /// Everything in one paste, for a support message.
     static func summary() -> String {
         var lines = ["DecryptIPA diagnostics", "logs: \(logDirectory.path)", ""]
-        for url in reports() {
+        for url in reports() + previousRuns() {
             lines.append("=== \(url.lastPathComponent) ===")
             lines.append(text(of: url))
             lines.append("")

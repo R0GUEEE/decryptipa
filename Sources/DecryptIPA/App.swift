@@ -30,6 +30,7 @@ struct RootView: View {
 
     var body: some View {
         TabView(selection: $selection) {
+            // (selection changes are breadcrumbed below)
             DecryptView()
                 .tabItem { Label("Decrypt", systemImage: "lock.open.display") }
                 .tag(0)
@@ -41,6 +42,9 @@ struct RootView: View {
             LibraryView()
                 .tabItem { Label("Library", systemImage: "folder") }
                 .tag(2)
+        }
+        .onChange(of: selection) { _, value in
+            Diagnostics.breadcrumb("tab: \(value)")
         }
     }
 }

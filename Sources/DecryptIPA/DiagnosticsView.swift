@@ -6,6 +6,7 @@ struct DiagnosticsView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var reports: [URL] = []
+    @State private var previousRuns: [URL] = []
     @State private var selected: URL?
     @State private var body_: String = ""
 
@@ -16,6 +17,30 @@ struct DiagnosticsView: View {
                     Section {
                         Text("Nothing recorded yet.")
                             .foregroundStyle(.secondary)
+                    }
+                }
+
+                if !previousRuns.isEmpty {
+                    Section {
+                        ForEach(previousRuns, id: \.self) { url in
+                            Button {
+                                selected = url
+                                body_ = Diagnostics.text(of: url)
+                            } label: {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(url.deletingPathExtension().lastPathComponent)
+                                        .font(.subheadline.weight(.medium))
+                                    Text(Diagnostics.lastStep(of: url))
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(2)
+                                }
+                            }
+                        }
+                    } header: {
+                        Text("Previous runs")
+                    } footer: {
+                        Text("The line under each run is the last thing the app recorded before it stopped. A run that ends at \"scenePhase: background\" was backgrounded; one that ends mid-job names the failing step.")
                     }
                 }
 
@@ -90,6 +115,7 @@ struct DiagnosticsView: View {
 
     private func reload() {
         reports = Diagnostics.reports()
+        previousRuns = Diagnostics.previousRuns()
     }
 
     struct SelectedReport: Identifiable {

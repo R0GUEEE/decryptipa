@@ -64,6 +64,7 @@ final class DecryptEngine: ObservableObject {
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
     private var pendingLog: [LogEntry] = []
     private var flushScheduled = false
+    private var heartbeat: Task<Void, Never>?
 
     var isRunning: Bool { task != nil }
 
@@ -74,6 +75,7 @@ final class DecryptEngine: ObservableObject {
         reset()
         startedAt = Date()
         beginBackgroundTask()
+        startHeartbeat()
         task = Task { [weak self] in
             guard let self else { return }
             await self.perform(request)
@@ -88,6 +90,19 @@ final class DecryptEngine: ObservableObject {
 
     func clearLog() {
         log.removeAll()
+    }
+
+    /// A watchdog kill or a jetsam eviction leaves no signal and no exception.
+    /// A breadcrumb every few seconds at least bounds where the run died.
+    private func startHeartbeat() {
+        heartbeat?.cancel()
+        heartbeat = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                guard let self, !Task.isCancelled else { return }
+                Diagnostics.breadcrumb("heartbeat \(self.phase.title) · \(self.receivedBytes) B · \(self.imagesDone) images")
+            }
+        }
     }
 
     private func beginBackgroundTask() {
@@ -163,6 +178,8 @@ final class DecryptEngine: ObservableObject {
             self.transport = nil
             Task { await transport?.close() }
             task = nil
+            heartbeat?.cancel()
+            heartbeat = nil
             endBackgroundTask()
         }
 
