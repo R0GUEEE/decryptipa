@@ -60,6 +60,10 @@ final class AppStoreSession: ObservableObject {
     @Published private(set) var anisetteCatalogRefreshing = false
 
     private var automaticAnisetteUser: AnisetteUser? = nil
+    /// The RemoteAnisette handshake is a multi-second exchange; repeated sign-in
+    /// taps must not repeat it for the same server.
+    private var lastProvisionAt: Date?
+    private var lastProvisionHost: String?
     private var anisetteCatalogFetchedAt: Date? = nil
     private static let accountKey = "appstore.account"
     private static let passwordKey = "appstore.password"
@@ -202,7 +206,7 @@ final class AppStoreSession: ObservableObject {
         pendingEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
         pendingPassword = password
         pendingRemember = rememberPassword
-        Diagnostics.breadcrumb("apple sign-in started · anisette=\(usesAnisette) · storefront=\(country)")
+        Diagnostics.breadcrumb("apple sign-in started · storefront=\(country)")
 
         if !automaticAnisetteReady {
             do {
@@ -219,6 +223,7 @@ final class AppStoreSession: ObservableObject {
         }
 
         let anisette = await anisetteHeaders()
+        Diagnostics.breadcrumb("apple sign-in mode · anisette=" + (anisette == nil ? "none" : "ready") + " · storefront=" + country)
         append(anisette == nil ? "Using the legacy App Store sign-in path (no anisette provider configured)."
                                : "Using native App Store sign-in with anisette attestation.", .debug)
 
@@ -505,6 +510,17 @@ final class AppStoreSession: ObservableObject {
     }
 
     private func provisionAutomaticAnisette(at preferredURL: URL) async throws -> AnisetteHeaders {
+        // Reuse a recent provision for the same server instead of handshaking again.
+        if let user = automaticAnisetteUser,
+           user.url.host == preferredURL.host,
+           let lastProvisionAt,
+           Date().timeIntervalSince(lastProvisionAt) < 60 {
+            if let headers = try? AnisetteHeaders.validated(await user.fetchHeaders()) {
+                Diagnostics.breadcrumb("anisette provision reused · " + (user.url.host ?? "?"))
+                return headers
+            }
+        }
+
         await refreshPublicAnisetteServers()
 
         let selectedServer = automaticAnisetteServer
@@ -544,6 +560,8 @@ final class AppStoreSession: ObservableObject {
                 Keychain.save(data, account: Self.automaticAnisetteUserKey)
                 automaticAnisetteUser = user
                 automaticAnisetteReady = true
+                lastProvisionAt = Date()
+                lastProvisionHost = url.host
                 status = "Anisette is ready · " + option.name
                 append("Anisette ready from " + host + "; rotating headers validated.", .success)
                 Diagnostics.breadcrumb("anisette server selected · " + host)
