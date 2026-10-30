@@ -12,8 +12,12 @@ enum SignInOutcome {
 extension AppStoreClient {
     static let nativeAuthURL = "https://auth.itunes.apple.com/auth/v1/native/fast/"
 
-    /// Chooses the strongest available path: native + session 2FA when anisette
-    /// is configured, otherwise the legacy MZFinance password+code flow.
+    /// Tries every sign-in shape this app can produce, in order of strength, and
+    /// reports the collected failures when all of them are refused.
+    ///
+    /// Apple now answers HTTP 403 with an empty body to unsigned authenticate
+    /// requests, so "did it fail because of the password?" is no longer a safe
+    /// assumption — the error text says which stage refused.
     func beginSignIn(
         email: String,
         password: String,
@@ -21,6 +25,10 @@ extension AppStoreClient {
         anisette: AnisetteHeaders?,
         widgetKey: String
     ) async throws -> SignInOutcome {
+        var notes: [String] = []
+        var lastStatus = 403
+
+        // 1. Native auth, when a provider can attest the device.
         if let anisette {
             do {
                 return try await nativeSignIn(
@@ -30,29 +38,69 @@ extension AppStoreClient {
                     anisette: anisette,
                     widgetKey: widgetKey
                 )
-            } catch let error as AppError {
-                // Native auth fails closed on unattested providers; the legacy
-                // endpoint still works for most accounts, so fall through.
-                lastNativeFailure = error.errorDescription ?? "native auth failed"
+            } catch let error as AppStoreError {
+                lastStatus = error.statusCode ?? lastStatus
+                lastNativeFailure = error.errorDescription
+                notes.append("native: \(error.errorDescription ?? "failed")")
+            } catch {
+                notes.append("native: \(error)")
             }
         }
 
+        // 2. Classic MZFinance, with anisette headers when we have them.
         do {
-            let account = try await signIn(email: email, password: password, authCode: "", country: country)
+            let account = try await signIn(
+                email: email,
+                password: password,
+                authCode: "",
+                country: country,
+                anisette: anisette
+            )
             return .signedIn(account)
         } catch AppStoreError.authCodeRequired {
-            // The refused attempt is what makes Apple send the code, so the
-            // challenge is ready to accept it immediately.
-            return .challenge(TwoFactorChallenge(
-                mode: .legacy,
-                email: email,
-                sessionID: nil,
-                scnt: nil,
-                options: [.device],
-                codeLength: 6,
-                note: "Apple requires two-factor authentication. A \(6)-digit code was sent to the trusted phone number and devices on this account — enter it below."
-            ))
+            return .challenge(Self.legacyChallenge(email: email))
+        } catch let error as AppStoreError {
+            lastStatus = error.statusCode ?? lastStatus
+            if case .rateLimited = error { throw error }
+            notes.append("legacy: \(error.errorDescription ?? "failed")")
+        } catch {
+            notes.append("legacy: \(error)")
         }
+
+        // 3. Native auth with local identity headers only. Some accounts and
+        //    regions still accept it, and it costs one request to find out.
+        if anisette == nil {
+            do {
+                let outcome = try await nativeSignIn(
+                    email: email,
+                    password: password,
+                    country: country,
+                    anisette: AnisetteHeaders.local(guid: guid),
+                    widgetKey: widgetKey
+                )
+                notes.append("native (unattested): accepted")
+                return outcome
+            } catch let error as AppStoreError {
+                lastStatus = error.statusCode ?? lastStatus
+                notes.append("native (unattested): \(error.errorDescription ?? "failed")")
+            } catch {
+                notes.append("native (unattested): \(error)")
+            }
+        }
+
+        throw AppStoreError.blocked(lastStatus, notes.joined(separator: " | "))
+    }
+
+    static func legacyChallenge(email: String) -> TwoFactorChallenge {
+        TwoFactorChallenge(
+            mode: .legacy,
+            email: email,
+            sessionID: nil,
+            scnt: nil,
+            options: [.device],
+            codeLength: 6,
+            note: "Apple requires two-factor authentication. A 6-digit code was sent to the trusted phone number and devices on this account — enter it below."
+        )
     }
 
     func nativeSignIn(
@@ -78,7 +126,7 @@ extension AppStoreClient {
             "why": "signIn"
         ])
 
-        let (data, response) = try await http.send(request)
+        let (data, response) = try await perform(request)
         let json = TwoFactorParsing.jsonDictionary(data)
         let headers = Self.headerDictionary(response)
 
@@ -125,7 +173,14 @@ extension AppStoreClient {
                 : message)
         }
 
+        if response.statusCode == 429 {
+            throw AppStoreError.rateLimited(response.statusCode)
+        }
+
         guard response.statusCode == 200 else {
+            if response.statusCode == 401 || response.statusCode == 403 {
+                throw AppStoreError.blocked(response.statusCode, AppStorePlist.snippet(data))
+            }
             throw AppStoreError.signIn("Native sign-in failed (HTTP \(response.statusCode)): \(AppStorePlist.snippet(data))")
         }
 

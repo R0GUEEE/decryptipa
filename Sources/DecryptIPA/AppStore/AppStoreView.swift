@@ -206,10 +206,31 @@ struct AppStoreView: View {
     }
 
     private func errorSection(_ message: String) -> some View {
-        Section("Problem") {
+        Section {
             Text(message)
                 .font(.callout)
                 .foregroundStyle(.red)
+
+            if !session.log.isEmpty {
+                LogConsole(entries: Array(session.log.suffix(6)), maxHeight: 120)
+                    .background(Color(.secondarySystemBackground))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+
+            ShareLink(item: session.diagnosticsText) {
+                Label("Copy diagnostics", systemImage: "doc.on.doc")
+            }
+
+            if session.app != nil {
+                Button {
+                    Task { await session.download() }
+                } label: {
+                    Label("Try the download again", systemImage: "arrow.clockwise")
+                }
+            }
+        } header: {
+            Text("Problem")
+        }
 
             if let app = session.app {
                 Button {
@@ -276,6 +297,25 @@ struct SignInView: View {
                         Text(error)
                             .font(.caption)
                             .foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        if session.errorNeedsAttestation {
+                            Button {
+                                showingAdvanced = true
+                            } label: {
+                                Label("Set up an anisette provider", systemImage: "key.horizontal")
+                            }
+                            Text("Anisette servers are small HTTP services (anisette-v3 compatible). Without one, Apple refuses the request before it ever looks at the password.")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        ShareLink(item: session.diagnosticsText) {
+                            Label("Copy diagnostics", systemImage: "doc.on.doc")
+                                .font(.caption)
+                        }
+                    } header: {
+                        Text("Sign-in problem")
                     }
                 }
 

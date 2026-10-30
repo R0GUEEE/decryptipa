@@ -34,6 +34,16 @@ enum AppStoreError: LocalizedError {
     case temporarilyUnavailable
     case needsAttestation
     case licenseRequired
+    case blocked(Int, String)
+    case rateLimited(Int)
+
+    /// HTTP status carried by the failure, when there is one.
+    var statusCode: Int? {
+        switch self {
+        case .blocked(let status, _), .rateLimited(let status): return status
+        default: return nil
+        }
+    }
 
     var errorDescription: String? {
         switch self {
@@ -52,6 +62,15 @@ enum AppStoreError: LocalizedError {
                 + "Install the app from the App Store on the jailbroken device and decrypt the installed copy instead."
         case .licenseRequired:
             return "No licence for this account yet — the app must be acquired (purchased or downloaded once) before it can be decrypted."
+        case .blocked(let status, let detail):
+            let suffix = detail.isEmpty ? "" : " (\(detail))"
+            if status == 403 {
+                return "Apple refused the sign-in request itself (HTTP 403, no body)\(suffix). The App Store endpoint now expects a signed request: Apple verifies an SAP action signature that only an attested client can produce. "
+                    + "Add an anisette provider in Advanced to switch to native attestation, or decrypt the copy already installed on the device — that path needs no Apple account at all."
+            }
+            return "Apple refused the request (HTTP \(status))\(suffix)."
+        case .rateLimited(let status):
+            return "Apple rate limited the request (HTTP \(status)). Wait a minute and try again."
         }
     }
 }
@@ -88,10 +107,42 @@ final class AppStoreClient {
     private(set) var account: AppStoreAccount?
     /// Why native auth was skipped or failed, for the UI to surface.
     var lastNativeFailure: String?
+    /// Every App Store request/response, newest last, for diagnostics.
+    private(set) var exchanges: [HTTPExchange] = []
 
     init(guid: String) {
         self.guid = guid
         self.http = AppStoreHTTP()
+    }
+
+    /// Single funnel for every request so the UI can show what Apple answered.
+    func perform(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        let (data, response) = try await perform(request)
+
+        var notes: [String] = []
+        if let server = response.value(forHTTPHeaderField: "Server"), !server.isEmpty {
+            notes.append(server)
+        }
+        if let correlation = response.value(forHTTPHeaderField: "X-Apple-Jingle-Correlation-Key"), !correlation.isEmpty {
+            notes.append("corr:\(correlation.prefix(10))")
+        }
+        if let location = response.value(forHTTPHeaderField: "Location"), !location.isEmpty {
+            notes.append("→ \(location)")
+        }
+        if let contentType = response.value(forHTTPHeaderField: "Content-Type"), !contentType.isEmpty {
+            notes.append(contentType)
+        }
+
+        exchanges.append(HTTPExchange(
+            method: request.httpMethod ?? "GET",
+            url: request.url?.absoluteString ?? "?",
+            status: response.statusCode,
+            bytes: data.count,
+            note: notes.joined(separator: " · ")
+        ))
+        if exchanges.count > 40 { exchanges.removeFirst(exchanges.count - 40) }
+
+        return (data, response)
     }
 
     // MARK: Bag
@@ -108,7 +159,7 @@ final class AppStoreClient {
         request.setValue("application/xml", forHTTPHeaderField: "Accept")
         request.setValue(Self.configuratorUA, forHTTPHeaderField: "User-Agent")
 
-        let (data, response) = try await http.send(request)
+        let (data, response) = try await perform(request)
         guard response.statusCode == 200 else {
             throw AppStoreError.signIn("App Store bag request failed (HTTP \(response.statusCode)).")
         }
@@ -131,7 +182,13 @@ final class AppStoreClient {
     /// Mirrors appstore.Login: POST an XML plist to the authenticate endpoint,
     /// follow the pod redirect by re-posting, retry once on `-5000`, and treat
     /// "BadLogin.Configurator_message" as the 2FA gate.
-    func signIn(email: String, password: String, authCode: String, country: String) async throws -> AppStoreAccount {
+    func signIn(
+        email: String,
+        password: String,
+        authCode: String,
+        country: String,
+        anisette: AnisetteHeaders? = nil
+    ) async throws -> AppStoreAccount {
         var endpoint = Self.defaultAuthURL
         if let bagEndpoint = try? await fetchBag().authEndpoint, !bagEndpoint.isEmpty {
             endpoint = bagEndpoint
@@ -150,6 +207,8 @@ final class AppStoreClient {
             request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
             request.setValue("application/xml", forHTTPHeaderField: "Accept")
             request.setValue(Self.configuratorUA, forHTTPHeaderField: "User-Agent")
+            request.setValue("Software", forHTTPHeaderField: "X-Apple-Client-Application")
+            anisette?.apply(to: &request)
             request.httpBody = AppStorePlist.body([
                 "appleId": email,
                 "attempt": "\(requestAttempt)",
@@ -159,7 +218,7 @@ final class AppStoreClient {
                 "why": "signIn"
             ])
 
-            let (data, response) = try await http.send(request)
+            let (data, response) = try await perform(request)
 
             if response.statusCode == 301 || response.statusCode == 302 || response.statusCode == 307 {
                 guard let location = response.value(forHTTPHeaderField: "Location"),
@@ -193,6 +252,18 @@ final class AppStoreClient {
 
             if !failureType.isEmpty {
                 throw AppStoreError.signIn(customerMessage.isEmpty ? "Sign-in failed (failureType \(failureType))." : customerMessage)
+            }
+
+            if response.statusCode == 429 {
+                throw AppStoreError.rateLimited(response.statusCode)
+            }
+
+            if response.statusCode == 401 || response.statusCode == 403 {
+                let contentType = response.value(forHTTPHeaderField: "Content-Type") ?? ""
+                throw AppStoreError.blocked(
+                    response.statusCode,
+                    data.isEmpty ? "empty body, \(contentType.isEmpty ? "no content type" : contentType)" : AppStorePlist.snippet(data)
+                )
             }
 
             guard response.statusCode == 200, !token.isEmpty, !dsid.isEmpty else {
@@ -262,7 +333,7 @@ final class AppStoreClient {
             "salableAdamId": "\(app.trackID)"
         ], integers: ["salableAdamId"])
 
-        let (data, response) = try await http.send(request)
+        let (data, response) = try await perform(request)
         let payload = (try? AppStorePlist.parse(data)) ?? [:]
         let failureType = (payload["failureType"] as? String) ?? ""
         let message = (payload["customerMessage"] as? String) ?? ""
@@ -377,7 +448,7 @@ final class AppStoreClient {
         request.setValue(account.directoryServicesID, forHTTPHeaderField: "X-Dsid")
         request.httpBody = AppStorePlist.body(values)
 
-        let (data, response) = try await http.send(request)
+        let (data, response) = try await perform(request)
         let payload = (try? AppStorePlist.parse(data)) ?? [:]
         return DownloadAttempt(payload: payload, status: response.statusCode)
     }
@@ -512,6 +583,21 @@ final class AppStoreClient {
         let path = url.path
         let expected = "/WebObjects/MZFinance.woa/wa/authenticate"
         return path == expected || path == expected + "/"
+    }
+}
+
+/// One recorded request/response pair.
+struct HTTPExchange: Identifiable, Hashable {
+    let id = UUID()
+    let method: String
+    let url: String
+    let status: Int
+    let bytes: Int
+    let note: String
+
+    var summary: String {
+        let path = URL(string: url)?.path ?? url
+        return "\(method) \(path) → \(status) · \(bytes) B" + (note.isEmpty ? "" : " · \(note)")
     }
 }
 

@@ -117,6 +117,12 @@ final class AppStoreSession: ObservableObject {
         return challenge.preferredOption
     }
 
+    /// True when Apple refused the request itself rather than the password.
+    var errorNeedsAttestation: Bool {
+        guard let error else { return false }
+        return error.contains("403") || error.contains("anisette") || error.contains("signed request")
+    }
+
     var canResend: Bool {
         guard let codeRequestedAt else { return true }
         return Date().timeIntervalSince(codeRequestedAt) > 30
@@ -436,6 +442,27 @@ final class AppStoreSession: ObservableObject {
     }
 
     // MARK: - Helpers
+
+    /// Everything a support conversation needs: the app log plus the exact
+    /// request/response pairs Apple answered.
+    var diagnosticsText: String {
+        var lines = ["DecryptIPA App Store diagnostics"]
+        lines.append("device GUID: \(guid)")
+        lines.append("storefront: \(country)")
+        lines.append("anisette: \(usesAnisette ? anisetteURL : "none")")
+        lines.append("mode: \(usesAnisette ? "native" : "legacy")")
+        lines.append("")
+        lines.append("— requests —")
+        for exchange in client.exchanges {
+            lines.append(exchange.summary)
+        }
+        lines.append("")
+        lines.append("— log —")
+        for entry in log {
+            lines.append("[\(entry.level.rawValue)] \(entry.text)")
+        }
+        return lines.joined(separator: "\n")
+    }
 
     private func fail(_ error: Error, keepStatus: Bool = false) {
         let message = (error as? LocalizedError)?.errorDescription ?? "\(error)"
