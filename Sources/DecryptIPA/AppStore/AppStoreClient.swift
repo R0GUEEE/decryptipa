@@ -63,12 +63,10 @@ enum AppStoreError: LocalizedError {
         case .licenseRequired:
             return "No licence for this account yet — the app must be acquired (purchased or downloaded once) before it can be decrypted."
         case .blocked(let status, let detail):
-            let suffix = detail.isEmpty ? "" : " (\(detail))"
-            if status == 403 {
-                return "Apple refused the sign-in request itself (HTTP 403, no body)\(suffix). The App Store endpoint now expects a signed request: Apple verifies an SAP action signature that only an attested client can produce. "
-                    + "Add an anisette provider in Advanced to switch to native attestation, or decrypt the copy already installed on the device — that path needs no Apple account at all."
-            }
-            return "Apple refused the request (HTTP \(status))\(suffix)."
+            var text = "Apple rejected the sign-in request itself (HTTP " + String(status) + ")."
+            if !detail.isEmpty { text += "\n" + detail }
+            text += "\n\nApple's App Store endpoints now require a request signed by its own media-services framework (an SAP action signature). A sandboxed iOS app cannot produce that signature, and anisette headers alone do not change it. Two routes still work: import a session token minted by a signing client, or decrypt a copy already installed on the device."
+            return text
         case .rateLimited(let status):
             return "Apple rate limited the request (HTTP \(status)). Wait a minute and try again."
         }

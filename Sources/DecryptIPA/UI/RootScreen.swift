@@ -25,7 +25,7 @@ struct RootScreen: View {
                     summaryBar
                     ConnectionSection(engine: engine)
                     if let appStore {
-                        AccountSection(session: appStore)
+                        AccountSection(session: appStore, onUseInstalled: { source = .installed })
                         AppSection(
                             engine: engine,
                             session: appStore,

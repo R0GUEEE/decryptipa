@@ -4,6 +4,8 @@ import SwiftUI
 /// App Store authentication possible.
 struct AccountSection: View {
     @ObservedObject var session: AppStoreSession
+    /// Switches step 3 to the installed-app source when Apple blocks sign-in.
+    var onUseInstalled: () -> Void = {}
 
     @State private var email = ""
     @State private var password = ""
@@ -297,14 +299,43 @@ struct AccountSection: View {
                 }
             }
 
+            if session.error != nil {
+                DividerLine()
+                problemPanel
+            }
+        }
+    }
+
+    private var problemPanel: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 7) {
+                Image(systemName: "exclamationmark.shield.fill")
+                    .font(.system(size: 12))
+                Text(session.errorNeedsAttestation ? "Apple blocked this sign-in" : "Sign-in problem")
+                    .font(.caption.weight(.bold))
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(Palette.warning)
+
             if let error = session.error {
-                HStack(alignment: .top, spacing: 7) {
-                    Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 11))
-                    Text(error)
-                        .font(.caption2)
-                        .fixedSize(horizontal: false, vertical: true)
+                Text(error)
+                    .font(.caption2)
+                    .foregroundStyle(Palette.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if session.errorNeedsAttestation {
+                QuietButton(title: "Import a session token", icon: "square.and.arrow.down") {
+                    showingImport = true
                 }
-                .foregroundStyle(Palette.warning)
+                QuietButton(title: "Decrypt the installed copy instead", icon: "iphone.gen3") {
+                    onUseInstalled()
+                }
+                ShareLink(item: session.diagnosticsText) {
+                    Label("Copy sign-in diagnostics", systemImage: "doc.on.doc")
+                        .font(.caption2.weight(.semibold))
+                }
+                .foregroundStyle(Palette.accent)
             }
         }
     }

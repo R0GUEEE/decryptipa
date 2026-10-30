@@ -10,7 +10,7 @@ enum SignInOutcome {
 /// text a *specific* trusted number, because it hands back an `appleauth`
 /// session (`X-Apple-ID-Session-Id` + `scnt`) when 2FA is required.
 extension AppStoreClient {
-    static let nativeAuthURL = "https://auth.itunes.apple.com/auth/v1/native/fast/"
+    static let nativeAuthURL = "https://auth.itunes.apple.com/auth/v1/native/fast"
 
     /// Tries every sign-in shape this app can produce, in order of strength, and
     /// reports the collected failures when all of them are refused.
@@ -40,10 +40,10 @@ extension AppStoreClient {
                 )
             } catch let error as AppStoreError {
                 lastStatus = error.statusCode ?? lastStatus
-                lastNativeFailure = error.errorDescription
-                notes.append("native: \(error.errorDescription ?? "failed")")
+                lastNativeFailure = Self.summary(of: error)
+                notes.append("Native auth · " + Self.summary(of: error))
             } catch {
-                notes.append("native: \(error)")
+                notes.append("Native auth · " + String(describing: error))
             }
         }
 
@@ -62,7 +62,7 @@ extension AppStoreClient {
         } catch let error as AppStoreError {
             lastStatus = error.statusCode ?? lastStatus
             if case .rateLimited = error { throw error }
-            notes.append("legacy: \(error.errorDescription ?? "failed")")
+            notes.append("Classic sign-in · " + Self.summary(of: error))
         } catch {
             notes.append("legacy: \(error)")
         }
@@ -82,13 +82,31 @@ extension AppStoreClient {
                 return outcome
             } catch let error as AppStoreError {
                 lastStatus = error.statusCode ?? lastStatus
-                notes.append("native (unattested): \(error.errorDescription ?? "failed")")
+                notes.append("Unattested native auth · " + Self.summary(of: error))
             } catch {
-                notes.append("native (unattested): \(error)")
+                notes.append("Unattested native auth · " + String(describing: error))
             }
         }
 
-        throw AppStoreError.blocked(lastStatus, notes.joined(separator: " | "))
+        throw AppStoreError.blocked(lastStatus, notes.joined(separator: "\n"))
+    }
+
+    /// One line per attempt: Apple's status plus the first line of its body, so
+    /// the panel stays readable instead of repeating the full explanation.
+    static func summary(of error: AppStoreError) -> String {
+        switch error {
+        case .blocked(let status, let detail):
+            let first = detail.split(separator: "\n").first.map(String.init) ?? ""
+            let trimmed = first.trimmingCharacters(in: .whitespaces)
+            let body = trimmed.isEmpty ? "no body" : String(trimmed.prefix(90))
+            return "HTTP " + String(status) + " · " + body
+        case .rateLimited(let status):
+            return "HTTP " + String(status) + " · rate limited"
+        case .signIn(let message):
+            return "failed · " + String(message.prefix(120))
+        default:
+            return error.errorDescription ?? "failed"
+        }
     }
 
     static func legacyChallenge(email: String) -> TwoFactorChallenge {
@@ -116,7 +134,7 @@ extension AppStoreClient {
         var request = URLRequest(url: authURL)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("*/*", forHTTPHeaderField: "Accept")
         request.setValue(AnisetteProvider.userAgent, forHTTPHeaderField: "User-Agent")
         anisette.apply(to: &request)
         request.httpBody = try JSONSerialization.data(withJSONObject: [
