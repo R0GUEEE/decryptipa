@@ -14,3 +14,4 @@ tools/logic-check/Sources/LogicCheck/AppStoreClient.swift
 tools/logic-check/Sources/LogicCheck/Models.swift
 tools/logic-check/Sources/LogicCheck/Anisette.swift
 tools/logic-check/Sources/LogicCheck/TwoFactor.swift
+tools/logic-check/Sources/LogicCheck/PlistSupport.swift

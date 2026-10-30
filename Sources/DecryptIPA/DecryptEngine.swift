@@ -63,6 +63,9 @@ final class DecryptEngine: ObservableObject {
     private var startedAt: Date?
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
     private var pendingLog: [LogEntry] = []
+    /// Remote files to delete before the SSH session closes.
+    private var remoteCleanup: [String] = []
+    private var cleanupService: DeviceService?
     private var flushScheduled = false
     private var heartbeat: Task<Void, Never>?
 
@@ -190,7 +193,16 @@ final class DecryptEngine: ObservableObject {
             refreshElapsed()
             let transport = self.transport
             self.transport = nil
-            Task { await transport?.close() }
+            let cleanup = self.remoteCleanup
+            let service = self.cleanupService
+            self.remoteCleanup = []
+            self.cleanupService = nil
+            Task {
+                if let service {
+                    for path in cleanup { await service.removeRemote(path) }
+                }
+                await transport?.close()
+            }
             task = nil
             heartbeat?.cancel()
             heartbeat = nil
@@ -217,6 +229,7 @@ final class DecryptEngine: ObservableObject {
         let transport = try await SSHTransport.connect(profile: device, secrets: request.secrets)
         self.transport = transport
         let service = DeviceService(transport: transport)
+        cleanupService = service
         append("SSH session established.", .success)
         mark("ssh connected")
 
@@ -273,7 +286,7 @@ final class DecryptEngine: ObservableObject {
         try await transport.createDirectories(SSHTransport.stagingDir)
         let remoteIPA = "\(SSHTransport.stagingDir)/\(safeFileName(bundleID))-\(UUID().uuidString.prefix(6)).ipa"
 
-        defer { Task { await service.removeRemote(remoteIPA) } }
+        remoteCleanup.append(remoteIPA)
 
         // ---- resolve installed copy
         var installed = try await service.findInstalled(bundleID: bundleID)

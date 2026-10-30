@@ -271,6 +271,30 @@ check(anisetteRotation.first?.url == anisetteOptions[2].url, "rotation begins at
 check(anisetteRotation.count == anisetteOptions.count, "rotation visits every public server once")
 check(Set(anisetteRotation.map(\.url)).count == anisetteOptions.count, "rotation has no duplicate endpoints")
 
+print("Binary property-list decoding")
+let plistFixture: [String: Any] = [
+    "CFBundleIdentifier": "com.example.app",
+    "CFBundleShortVersionString": "4.2.1",
+    "CFBundleVersion": "421"
+]
+if let binary = try? PropertyListSerialization.data(fromPropertyList: plistFixture, format: .binary, options: 0) {
+    check(PlistSupport.dictionary(from: binary)?["CFBundleIdentifier"] as? String == "com.example.app", "binary plist decodes")
+    check(PlistSupport.version(from: binary) == "4.2.1", "binary plist version read")
+    check(PlistSupport.bundleIdentifier(from: binary) == "com.example.app", "binary plist bundle id read")
+    let corrupted = String(decoding: binary, as: UTF8.self).data(using: .utf8) ?? Data()
+    check(PlistSupport.dictionary(from: corrupted) == nil, "UTF-8 round trip is rejected (the bug this guards)")
+} else {
+    check(false, "binary plist fixture created")
+}
+if let xml = try? PropertyListSerialization.data(fromPropertyList: plistFixture, format: .xml, options: 0) {
+    check(PlistSupport.version(from: xml) == "4.2.1", "XML plist decoded")
+}
+check(PlistSupport.dictionary(from: Data("not a plist".utf8)) == nil, "garbage rejected")
+let buildOnly: [String: Any] = ["CFBundleVersion": "9"]
+if let data = try? PropertyListSerialization.data(fromPropertyList: buildOnly, format: .binary, options: 0) {
+    check(PlistSupport.version(from: data) == "9", "version falls back to CFBundleVersion")
+}
+
 print("Apple authentication parity")
 check(AppStoreClient.phoneStorefrontHint(for: "+86 138 0013 8000") == "143465-2,29", "CN phone Apple ID gets a storefront hint")
 check(AppStoreClient.phoneStorefrontHint(for: "0091 98765 43210") == "143467-2,29", "IN phone Apple ID gets a storefront hint")

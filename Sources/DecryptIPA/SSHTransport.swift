@@ -126,6 +126,32 @@ final class SSHTransport: @unchecked Sendable {
         try await collect(command, privileged: false)
     }
 
+    /// Raw bytes for commands that emit binary data (property lists, for
+    /// example). `run` decodes as UTF-8 and would corrupt them.
+    func runData(_ command: String, privileged isPrivileged: Bool = false) async throws -> (data: Data, stderr: String, exitCode: Int32) {
+        let line = isPrivileged ? privileged(command) : command
+        var stdout = Data()
+        var stderr = Data()
+        let cap = 8 << 20
+
+        let stream = try await client.executeCommandStream(line)
+        do {
+            for try await chunk in stream {
+                switch chunk {
+                case .stdout(let buffer):
+                    if stdout.count < cap { stdout.append(contentsOf: buffer.readableBytesView) }
+                case .stderr(let buffer):
+                    if stderr.count < cap { stderr.append(contentsOf: buffer.readableBytesView) }
+                }
+            }
+            return (stdout, String(decoding: stderr, as: UTF8.self), 0)
+        } catch let failure as SSHClient.CommandFailed {
+            return (stdout, String(decoding: stderr, as: UTF8.self), Int32(failure.exitCode))
+        } catch {
+            throw appFailure("Command failed: \(error)")
+        }
+    }
+
     func runPrivileged(_ command: String) async throws -> CommandResult {
         try await collect(command, privileged: true)
     }
@@ -279,6 +305,7 @@ final class SSHTransport: @unchecked Sendable {
         onProgress: @escaping @Sendable (Int64, Int64) -> Void
     ) async throws {
         let state = UploadState(fileURL: fileURL)
+        defer { try? state.handle.close() }
 
         try await client.withSFTP { sftp in
             try await sftp.withFile(filePath: remote, flags: [.write, .create, .truncate]) { file in
@@ -295,8 +322,6 @@ final class SSHTransport: @unchecked Sendable {
             attributes.permissions = mode
             try? await sftp.setAttributes(at: remote, to: attributes)
         }
-
-        try? state.handle.close()
     }
 }
 

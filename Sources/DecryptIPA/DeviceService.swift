@@ -166,18 +166,21 @@ final class DeviceService {
     }
 
     func installedVersion(bundlePath: String) async throws -> String {
-        let info = try await readPlist(bundlePath + "/Info.plist")
-        return (info["CFBundleShortVersionString"] as? String)
-            ?? (info["CFBundleVersion"] as? String) ?? "?"
+        let result = try await transport.runData("cat \(shellQuote(bundlePath + "/Info.plist"))", privileged: true)
+        guard result.exitCode == 0 else {
+            throw appFailure("Could not read the installed Info.plist (exit \(result.exitCode))")
+        }
+        return PlistSupport.version(from: result.data) ?? "?"
     }
 
+    /// Reads a property list with raw bytes: iOS `Info.plist` files are binary,
+    /// and a UTF-8 round trip would corrupt them.
     func readPlist(_ path: String) async throws -> [String: Any] {
-        let result = try await transport.runPrivileged("cat \(shellQuote(path))")
-        guard result.ok, let payload = result.stdout.data(using: .utf8) else {
+        let result = try await transport.runData("cat \(shellQuote(path))", privileged: true)
+        guard result.exitCode == 0 else {
             throw appFailure("Could not read \(path) (exit \(result.exitCode))")
         }
-        guard let plist = try? PropertyListSerialization.propertyList(from: payload, options: [], format: nil),
-              let dictionary = plist as? [String: Any] else {
+        guard let dictionary = PlistSupport.dictionary(from: result.data) else {
             throw appFailure("Could not parse \(path) as a property list.")
         }
         return dictionary

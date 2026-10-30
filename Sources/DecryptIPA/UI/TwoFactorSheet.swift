@@ -136,6 +136,7 @@ struct TwoFactorSheet: View {
         let isSelected = selected?.id == option.id
         return Button {
             selected = option
+            session.selectOption(option.id)
             code = ""
             lastError = nil
         } label: {
