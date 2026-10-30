@@ -1,30 +1,29 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// The main workflow. A plain ScrollView + small cards deliberately replaces
+/// Form/Section composition: the app's idle crash traces showed a runaway
+/// allocation while this screen was merely visible. Keeping this tree explicit
+/// makes it easy to bisect and cheap to lay out.
 struct DecryptView: View {
     enum InputMode: String, CaseIterable, Identifiable {
-        case ipa
-        case appStore
-        case installed
-
+        case ipa, appStore, installed
         var id: String { rawValue }
         var label: String {
             switch self {
-            case .ipa: return "IPA file"
-            case .appStore: return "App Store"
-            case .installed: return "Installed"
+            case .ipa: "IPA file"
+            case .appStore: "App Store"
+            case .installed: "Installed"
             }
         }
     }
 
     @EnvironmentObject private var store: DeviceStore
     @EnvironmentObject private var library: LibraryStore
-
     @StateObject private var engine = DecryptEngine()
-    // Created only when the App Store sheet is first opened: keeping keychain,
-    // UserDefaults and the URLSession out of the launch path.
-    @State private var appStoreSession: AppStoreSession?
 
+    // Keep account/keychain/URLSession work out of the launch path.
+    @State private var appStoreSession: AppStoreSession?
     @State private var options = DecryptOptions()
     @State private var mode: InputMode = .ipa
     @State private var inputURL: URL?
@@ -35,60 +34,64 @@ struct DecryptView: View {
     @State private var showingLog = false
     @State private var showingDevices = false
     @State private var showingAppStore = false
+    @State private var showingAdvanced = false
+
+    private let ink = Color(red: 0.12, green: 0.17, blue: 0.24)
+    private let canvas = Color(red: 0.95, green: 0.96, blue: 0.98)
+    private let accent = Color(red: 0.21, green: 0.42, blue: 0.85)
 
     var body: some View {
         NavigationStack {
-            Form {
-                deviceSection
-                inputSection
-                optionsSection
-
-                if engine.isRunning || !engine.log.isEmpty {
-                    progressSection
+            ScrollView {
+                VStack(spacing: 16) {
+                    headerCard
+                    deviceCard
+                    inputCard
+                    if engine.isRunning || !engine.log.isEmpty { progressCard }
+                    if let url = engine.outputURL { resultCard(url) }
+                    optionsCard
+                    actionCard
+                    footer
                 }
-
-                if let url = engine.outputURL {
-                    resultSection(url: url)
-                }
-
-                actionSection
+                .padding(.horizontal, 16)
+                .padding(.top, 10)
+                .padding(.bottom, 22)
+                .frame(maxWidth: 680)
+                .frame(maxWidth: .infinity)
             }
+            .background(canvas.ignoresSafeArea())
+            .scrollIndicators(.hidden)
             .navigationTitle("DecryptIPA")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { showingDevices = true } label: {
+                        Image(systemName: "iphone.gen3")
+                    }
+                    .accessibilityLabel("Devices")
+                }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showingLog = true
-                    } label: {
+                    Button { showingLog = true } label: {
                         Image(systemName: "text.alignleft")
                     }
                     .disabled(engine.log.isEmpty)
-                }
-                ToolbarItem(placement: .topBarLeading) {
-                    Button {
-                        showingDevices = true
-                    } label: {
-                        Image(systemName: "iphone.gen3")
-                    }
+                    .accessibilityLabel("Job log")
                 }
             }
-
-            .sheet(isPresented: $showingLog) {
-                LogSheet(engine: engine)
-            }
-            .sheet(isPresented: $showingDevices) {
-                DevicesView()
-            }
+            .sheet(isPresented: $showingLog) { LogSheet(engine: engine) }
+            .sheet(isPresented: $showingDevices) { DevicesView() }
             .sheet(isPresented: $showingAppStore) {
                 if let session = appStoreSession {
                     AppStoreView(
                         session: session,
-                    onUseIPA: { url, _ in
-                        inputURL = url
-                        inputMetadata = try? IPATool.metadata(for: url)
-                    },
-                        onUseInstalled: { bundleID in
+                        onUseIPA: { url, _ in
+                            inputURL = url
+                            inputMetadata = try? IPATool.metadata(for: url)
+                            mode = .appStore
+                        },
+                        onUseInstalled: { id in
+                            bundleIDText = id
                             mode = .installed
-                            bundleIDText = bundleID
                         }
                     )
                 }
@@ -96,10 +99,9 @@ struct DecryptView: View {
             .fileImporter(
                 isPresented: $showingImporter,
                 allowedContentTypes: [UTType(filenameExtension: "ipa") ?? .data, .zip],
-                allowsMultipleSelection: false
-            ) { result in
-                handleImport(result)
-            }
+                allowsMultipleSelection: false,
+                onCompletion: handleImport
+            )
             .onAppear {
                 Diagnostics.currentScreen = "decrypt"
                 library.refresh()
@@ -108,24 +110,66 @@ struct DecryptView: View {
                     store.devices.count, library.items.count, Diagnostics.memoryFootprintMB
                 ))
             }
-            .onDisappear {
-                Diagnostics.breadcrumb("decrypt tab disappeared")
-            }
+            .onDisappear { Diagnostics.breadcrumb("decrypt tab disappeared") }
             .onChange(of: engine.phase) { _, phase in
-                if case .done = phase { library.refresh() }
+                if phase == .done { library.refresh() }
             }
         }
     }
 
-    // MARK: Sections
+    // MARK: Header
 
-    private var deviceSection: some View {
-        Section {
+    private var headerCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "lock.open.rotation")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 48, height: 48)
+                    .background(accent, in: RoundedRectangle(cornerRadius: 15))
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Decrypt an app")
+                        .font(.title3.weight(.bold))
+                        .foregroundStyle(ink)
+                    Text("Run ipadecrypt on your connected device")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+
+            HStack(spacing: 8) {
+                StatusPill(
+                    title: store.selected?.name ?? "No device",
+                    icon: store.selected == nil ? "iphone.slash" : "iphone.gen3",
+                    tint: store.selected == nil ? .orange : .green
+                )
+                if let probe = engine.probe {
+                    StatusPill(title: probe.iosVersion, icon: "checkmark.circle.fill", tint: .green)
+                }
+                Spacer(minLength: 0)
+                Button { showingDevices = true } label: {
+                    Text(store.selected == nil ? "Set up" : "Change")
+                        .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.bordered)
+                .tint(accent)
+                .controlSize(.small)
+            }
+        }
+        .padding(16)
+        .cardSurface()
+        .onAppear { Diagnostics.currentScreen = "decrypt.header" }
+    }
+
+    // MARK: Device
+
+    private var deviceCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            CardHeading(title: "DEVICE", subtitle: "Remote jailbroken iPhone", icon: "iphone.gen3")
             if store.devices.isEmpty {
-                Button {
+                EmptyHint(text: "Add a device with OpenSSH enabled.", button: "Add device") {
                     showingDevices = true
-                } label: {
-                    Label("Add a jailbroken device", systemImage: "plus.circle")
                 }
             } else {
                 Picker("Device", selection: Binding(
@@ -136,225 +180,258 @@ struct DecryptView: View {
                         Text(device.name).tag(device.id)
                     }
                 }
+                .tint(accent)
                 if let device = store.selected {
-                    LabeledValue(label: "Endpoint", value: device.endpoint)
-                    LabeledValue(label: "Auth", value: device.auth.label)
-                    if device.effectiveUsesSudo {
-                        LabeledValue(label: "Privileges", value: "sudo")
-                    }
-                    if let probe = engine.probe {
-                        LabeledValue(label: "Device", value: probe.summary)
-                    }
-                    if let caps = engine.capabilities {
-                        LabeledValue(label: "Tooling", value: caps.summary)
-                    }
+                    Divider()
+                    InfoLine(label: "Endpoint", value: device.endpoint)
+                    InfoLine(label: "Authentication", value: device.auth.label)
+                    if let probe = engine.probe { InfoLine(label: "Device", value: probe.summary) }
+                    if let caps = engine.capabilities { InfoLine(label: "Tools", value: caps.summary) }
                 }
             }
-        } header: {
-            Text("Device")
         }
+        .padding(16)
+        .cardSurface()
+        .onAppear { Diagnostics.currentScreen = "decrypt.device" }
     }
 
-    private var inputSection: some View {
-        Section {
+    // MARK: Input
+
+    private var inputCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            CardHeading(title: "SOURCE", subtitle: "Choose what to decrypt", icon: "doc.zipper")
             Picker("Source", selection: $mode) {
-                ForEach(InputMode.allCases) { mode in
-                    Text(mode.label).tag(mode)
-                }
+                ForEach(InputMode.allCases) { item in Text(item.label).tag(item) }
             }
             .pickerStyle(.segmented)
 
             switch mode {
-            case .ipa:
-                Button {
-                    showingImporter = true
-                } label: {
-                    Label(inputURL == nil ? "Choose .ipa" : "Change .ipa", systemImage: "doc.badge.plus")
-                }
+            case .ipa: ipaInput
+            case .appStore: appStoreInput
+            case .installed: installedInput
+            }
+        }
+        .padding(16)
+        .cardSurface()
+        .onAppear { Diagnostics.currentScreen = "decrypt.input" }
+    }
 
-                if let url = inputURL {
-                    LabeledValue(label: "File", value: url.lastPathComponent)
-                    LabeledValue(label: "Size", value: ByteCountFormatter.string(fromByteCount: Int64((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0), countStyle: .file))
-                }
-                if let metadata = inputMetadata {
-                    LabeledValue(label: "Bundle", value: metadata.bundleID)
-                    LabeledValue(label: "Version", value: "\(metadata.version) (\(metadata.build))")
-                    LabeledValue(label: "MinimumOS", value: metadata.minimumOS)
-                    LabeledValue(label: "Families", value: metadata.deviceFamily.isEmpty ? "?" : metadata.deviceFamily.map(String.init).joined(separator: ", "))
-                }
-                if let inputError {
-                    Text(inputError)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                }
+    private var ipaInput: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Button { showingImporter = true } label: {
+                Label(inputURL == nil ? "Choose an IPA file" : "Choose a different IPA", systemImage: "folder.badge.plus")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.bordered)
+            .tint(accent)
 
-            case .appStore:
-                Button {
-                    if appStoreSession == nil {
-                        appStoreSession = AppStoreSession(outputDirectory: LibraryStore.defaultImportsRoot)
-                    }
-                    showingAppStore = true
-                } label: {
-                    Label((appStoreSession?.app == nil) ? "Browse the App Store" : "Open App Store browser",
-                          systemImage: "bag")
+            if let metadata = inputMetadata {
+                VStack(spacing: 7) {
+                    InfoLine(label: "App", value: metadata.displayName)
+                    InfoLine(label: "Bundle ID", value: metadata.bundleID)
+                    InfoLine(label: "Version", value: "\(metadata.version) (\(metadata.build))")
+                    InfoLine(label: "Minimum iOS", value: metadata.minimumOS)
+                    InfoLine(label: "IPA size", value: ByteCountFormatter.string(fromByteCount: metadata.fileSize, countStyle: .file))
                 }
-
-                if let app = appStoreSession?.app {
-                    LabeledValue(label: "App", value: app.name)
-                    LabeledValue(label: "Bundle id", value: app.bundleID)
-                    LabeledValue(label: "Store version", value: app.version)
-                }
-
-                if let ticket = appStoreSession?.ticket {
-                    LabeledValue(label: "Ticket", value: "\(ticket.version) · \(ticket.sinfs) sinf")
-                }
-
-                if let ipa = appStoreSession?.downloadedIPA {
-                    LabeledValue(label: "Downloaded", value: ipa.lastPathComponent)
-                    LabeledValue(label: "Size", value: ByteCountFormatter.string(fromByteCount: Int64((try? ipa.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0), countStyle: .file))
-                } else {
-                    Text("Look up an app by bundle id or App Store id, sign in, and download the encrypted IPA. It is decrypted on the device afterwards.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                if appStoreSession?.account == nil {
-                    Label("Not signed in — the App Store tab handles sign-in and 2FA.", systemImage: "person.crop.circle")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                }
-
-            case .installed:
-                LabeledContent("Bundle id") {
-                    TextField("com.example.app", text: $bundleIDText)
-                        .multilineTextAlignment(.trailing)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                }
-                Text("The app must already be installed on the device. Nothing is uploaded or patched; the helper decrypts the bundle in place.")
+                .padding(12)
+                .background(canvas, in: RoundedRectangle(cornerRadius: 12))
+            } else if let inputError {
+                Label(inputError, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            } else {
+                Text("The encrypted IPA is installed on the device, decrypted there, then saved back here.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-        } header: {
-            Text("Input")
-        } footer: {
-            if mode == .ipa {
-                Text("The IPA is installed with appinst so the helper can spawn it and read the decrypted pages. appinst + AppSync Unified are required on the device.")
+        }
+    }
+
+    private var appStoreInput: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Button {
+                if appStoreSession == nil {
+                    Diagnostics.breadcrumb("appstore session: init started from source card")
+                    appStoreSession = AppStoreSession(outputDirectory: LibraryStore.defaultImportsRoot)
+                }
+                showingAppStore = true
+            } label: {
+                Label("Find by App Store ID or bundle ID", systemImage: "bag")
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-        }
-    }
+            .buttonStyle(.bordered)
+            .tint(accent)
 
-    private var optionsSection: some View {
-        Section("Options") {
-            Toggle("Patch Info.plist for this device", isOn: $options.patchForInstall)
-            Toggle("Expand UIDeviceFamily if needed", isOn: $options.expandDeviceFamily)
-            Toggle("Reinstall when the version differs", isOn: $options.reinstallIfDifferent)
-            Toggle("Skip app extensions (appex)", isOn: $options.skipAppex)
-            Toggle("Uninstall afterwards (only if this run installed it)", isOn: $options.uninstallAfter)
-            Toggle("Verify cryptid in the output", isOn: $options.verifyOutput)
-            Toggle("Verbose helper logging", isOn: $options.verboseHelper)
-        }
-    }
-
-    private var progressSection: some View {
-        Section {
-            HStack {
-                Text(engine.phase.title)
-                    .font(.subheadline.weight(.medium))
-                Spacer()
-                Text(elapsedText(engine.elapsed))
-                    .font(.system(.caption, design: .monospaced))
+            if let app = appStoreSession?.app {
+                InfoLine(label: "App", value: app.name)
+                InfoLine(label: "Bundle ID", value: app.bundleID)
+                InfoLine(label: "Version", value: app.version)
+            }
+            if let ipa = appStoreSession?.downloadedIPA {
+                Label("Downloaded · \(ipa.lastPathComponent)", systemImage: "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.green)
+            } else {
+                Text("Sign in, resolve an identifier, then download the encrypted IPA.")
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
+        }
+    }
+
+    private var installedInput: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            TextField("com.example.app", text: $bundleIDText)
+                .font(.body.monospaced())
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .padding(12)
+                .background(canvas, in: RoundedRectangle(cornerRadius: 12))
+            Text("Decrypts an app that is already installed. Nothing is uploaded.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    // MARK: Progress
+
+    private var progressCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                CardHeading(title: engine.isRunning ? "WORKING" : "LAST JOB", subtitle: nil, icon: "waveform.path")
+                Spacer()
+                Text(elapsedText(engine.elapsed))
+                    .font(.system(.caption, design: .monospaced).weight(.medium))
+                    .foregroundStyle(.secondary)
+            }
+            Text(engine.phase.title)
+                .font(.headline)
+                .foregroundStyle(ink)
 
             if engine.isRunning {
                 if engine.phase == .uploading {
                     ProgressView(value: min(1, max(0, engine.installProgress)))
+                        .tint(accent)
                 } else {
-                    ProgressView()
-                        .progressViewStyle(.linear)
+                    ProgressView().tint(accent)
                 }
             }
 
-            HStack(spacing: 16) {
-                Label(ByteCountFormatter.string(fromByteCount: engine.receivedBytes, countStyle: .file), systemImage: "arrow.down.circle")
-                Label("\(engine.imagesDone)", systemImage: "lock.open")
-                if engine.imagesFailed > 0 {
-                    Label("\(engine.imagesFailed)", systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(.orange)
-                }
-                Spacer()
-            }
-            .font(.caption)
-            .monospacedDigit()
-
-            if let verification = engine.verification {
-                if verification.ok {
-                    Label("\(verification.plaintext)/\(verification.checked) Mach-O plaintext", systemImage: "checkmark.seal")
-                        .font(.caption)
-                        .foregroundStyle(.green)
-                } else {
-                    Label("\(verification.stillEncrypted.count) image(s) still encrypted", systemImage: "exclamationmark.triangle")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                }
+            HStack(spacing: 14) {
+                MetricPill(value: ByteCountFormatter.string(fromByteCount: engine.receivedBytes, countStyle: .file), label: "received")
+                MetricPill(value: "\(engine.imagesDone)", label: "images")
+                if engine.imagesFailed > 0 { MetricPill(value: "\(engine.imagesFailed)", label: "failed", tint: .orange) }
             }
 
-            LogConsole(entries: Array(engine.log.suffix(14)), maxHeight: 180)
-                .background(Color(.secondarySystemBackground))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-        } header: {
+            if let report = engine.verification {
+                Label(
+                    report.ok ? "\(report.plaintext)/\(report.checked) images are plaintext" : "\(report.stillEncrypted.count) images still encrypted",
+                    systemImage: report.ok ? "checkmark.seal.fill" : "exclamationmark.triangle.fill"
+                )
+                .font(.caption.weight(.medium))
+                .foregroundStyle(report.ok ? .green : .orange)
+            }
+
+            if !engine.log.isEmpty {
+                LogConsole(entries: Array(engine.log.suffix(6)), maxHeight: 130)
+                    .background(canvas, in: RoundedRectangle(cornerRadius: 12))
+            }
+            Button("View full log") { showingLog = true }
+                .font(.caption.weight(.semibold))
+                .buttonStyle(.plain)
+                .foregroundStyle(accent)
+        }
+        .padding(16)
+        .cardSurface()
+        .onAppear { Diagnostics.currentScreen = "decrypt.progress" }
+    }
+
+    // MARK: Result / options / action
+
+    private func resultCard(_ url: URL) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            CardHeading(title: "READY", subtitle: "Decrypted output", icon: "checkmark.seal.fill", tint: .green)
+            Text(url.lastPathComponent)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(ink)
+                .textSelection(.enabled)
             HStack {
-                Text("Progress")
+                ShareLink(item: url) { Label("Share IPA", systemImage: "square.and.arrow.up") }
                 Spacer()
-                Button("Full log") { showingLog = true }
-                    .font(.caption)
-                    .disabled(engine.log.isEmpty)
+                Button("Library") { library.refresh() }
             }
+            .font(.subheadline.weight(.medium))
+            .tint(accent)
         }
+        .padding(16)
+        .cardSurface()
     }
 
-    private func resultSection(url: URL) -> some View {
-        Section("Result") {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(url.lastPathComponent)
-                    .font(.subheadline.weight(.medium))
-                Text("Saved to Documents/Decrypted — visible in the Files app and the Library tab.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            ShareLink(item: url) {
-                Label("Share / export IPA", systemImage: "square.and.arrow.up")
-            }
-            Button {
-                library.refresh()
-            } label: {
-                Label("Show in Library", systemImage: "folder")
-            }
+    private var optionsCard: some View {
+        DisclosureGroup {
+            Toggle("Patch for this device", isOn: $options.patchForInstall)
+            Toggle("Expand device family", isOn: $options.expandDeviceFamily)
+            Toggle("Reinstall if version differs", isOn: $options.reinstallIfDifferent)
+            Toggle("Skip app extensions", isOn: $options.skipAppex)
+            Toggle("Uninstall if this job installed it", isOn: $options.uninstallAfter)
+            Toggle("Verify output", isOn: $options.verifyOutput)
+            Toggle("Verbose helper log", isOn: $options.verboseHelper)
+        } label: {
+            CardHeading(title: "OPTIONS", subtitle: "Advanced settings", icon: "slider.horizontal.3")
         }
+        .tint(accent)
+        .padding(16)
+        .cardSurface()
+        .onAppear { Diagnostics.currentScreen = "decrypt.options" }
     }
 
-    private var actionSection: some View {
-        Section {
+    private var actionCard: some View {
+        VStack(spacing: 8) {
             if engine.isRunning {
-                Button(role: .destructive) {
-                    engine.cancel()
-                } label: {
-                    Label("Cancel job", systemImage: "stop.circle")
+                Button(role: .destructive) { engine.cancel() } label: {
+                    Label("Cancel job", systemImage: "stop.circle.fill")
                         .frame(maxWidth: .infinity)
+                        .padding(.vertical, 5)
                 }
                 .buttonStyle(.borderedProminent)
             } else {
-                Button {
-                    startJob()
-                } label: {
-                    Label("Decrypt", systemImage: "lock.open.rotation")
+                Button(action: startJob) {
+                    Label("Decrypt IPA", systemImage: "lock.open.rotation")
+                        .font(.headline)
                         .frame(maxWidth: .infinity)
+                        .padding(.vertical, 7)
                 }
                 .buttonStyle(.borderedProminent)
+                .tint(accent)
                 .disabled(!canStart)
             }
+            if !canStart && !engine.isRunning {
+                Text(actionHint)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(14)
+        .cardSurface()
+        .onAppear { Diagnostics.currentScreen = "decrypt.action" }
+    }
+
+    private var footer: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "lock.shield")
+            Text("SSH credentials stay in the iOS Keychain · Output is unsigned")
+        }
+        .font(.caption2)
+        .foregroundStyle(.secondary)
+        .padding(.vertical, 2)
+    }
+
+    private var actionHint: String {
+        if store.selected == nil { return "Add a jailbroken device to get started." }
+        switch mode {
+        case .ipa: return inputURL == nil ? "Choose an encrypted IPA." : "Ready to decrypt on \(store.selected?.name ?? "device")."
+        case .appStore: return appStoreSession?.downloadedIPA == nil ? "Find an app and download its encrypted IPA first." : "Ready to decrypt the downloaded IPA."
+        case .installed: return bundleIDText.isEmpty ? "Enter the bundle ID of an installed app." : "Ready to decrypt the installed app."
         }
     }
 
@@ -371,17 +448,13 @@ struct DecryptView: View {
 
     private func startJob() {
         Diagnostics.breadcrumb("decrypt button tapped · mode=\(mode.rawValue)")
-
         guard let device = store.selected else {
             Diagnostics.breadcrumb("decrypt button: no device configured")
             return
         }
+
         let secrets = store.secrets(for: device)
-
-        // An App Store IPA is FairPlay-encrypted exactly like a local one, so the
-        // install-time Info.plist patching applies unchanged.
         let storeIPA = mode == .appStore ? appStoreSession?.downloadedIPA : nil
-
         Diagnostics.breadcrumb("job: start mode=\(mode.rawValue) device=\(device.endpoint) bundle=\(inputMetadata?.bundleID ?? bundleIDText) ipa=\(inputURL?.lastPathComponent ?? storeIPA?.lastPathComponent ?? "-")")
 
         let request = DecryptEngine.Request(
@@ -392,7 +465,6 @@ struct DecryptView: View {
             bundleIDOverride: mode == .installed ? bundleIDText.trimmingCharacters(in: .whitespaces) : nil,
             outputDirectory: library.root
         )
-
         Diagnostics.breadcrumb("engine.start returning")
         engine.start(request)
     }
@@ -400,16 +472,12 @@ struct DecryptView: View {
     private func handleImport(_ result: Result<[URL], Error>) {
         inputError = nil
         inputMetadata = nil
-
         switch result {
-        case .failure(let error):
-            inputError = error.localizedDescription
-
+        case .failure(let error): inputError = error.localizedDescription
         case .success(let urls):
             guard let url = urls.first else { return }
             let scoped = url.startAccessingSecurityScopedResource()
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-
             do {
                 let copy = try library.importCopy(from: url)
                 inputURL = copy
@@ -422,6 +490,99 @@ struct DecryptView: View {
     }
 }
 
+// MARK: - Small visual components
+
+private struct CardHeading: View {
+    var title: String
+    var subtitle: String?
+    var icon: String
+    var tint: Color = Color(red: 0.21, green: 0.42, blue: 0.85)
+
+    var body: some View {
+        HStack(spacing: 9) {
+            Image(systemName: icon)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(tint)
+                .frame(width: 30, height: 30)
+                .background(tint.opacity(0.10), in: RoundedRectangle(cornerRadius: 9))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.caption.weight(.bold)).tracking(0.7).foregroundStyle(.secondary)
+                if let subtitle { Text(subtitle).font(.subheadline.weight(.medium)).foregroundStyle(.primary) }
+            }
+            Spacer(minLength: 0)
+        }
+    }
+}
+
+private struct StatusPill: View {
+    var title: String
+    var icon: String
+    var tint: Color
+
+    var body: some View {
+        Label(title, systemImage: icon)
+            .font(.caption2.weight(.semibold))
+            .lineLimit(1)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 6)
+            .background(tint.opacity(0.10), in: Capsule())
+            .foregroundStyle(tint)
+    }
+}
+
+private struct InfoLine: View {
+    var label: String
+    var value: String
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(label).font(.caption).foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            Text(value)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.primary)
+                .multilineTextAlignment(.trailing)
+                .textSelection(.enabled)
+        }
+    }
+}
+
+private struct MetricPill: View {
+    var value: String
+    var label: String
+    var tint: Color = .secondary
+    var body: some View {
+        HStack(spacing: 4) {
+            Text(value).font(.caption.weight(.bold)).monospacedDigit().foregroundStyle(.primary)
+            Text(label).font(.caption2).foregroundStyle(tint)
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 6)
+        .background(Color(uiColor: .secondarySystemBackground), in: Capsule())
+    }
+}
+
+private struct EmptyHint: View {
+    var text: String
+    var button: String
+    var action: () -> Void
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(text).font(.subheadline).foregroundStyle(.secondary)
+            Button(button, action: action).buttonStyle(.bordered).controlSize(.small)
+        }
+    }
+}
+
+private extension View {
+    func cardSurface() -> some View {
+        background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.035), lineWidth: 1)
+            }
+    }
+}
+
 struct LogSheet: View {
     @ObservedObject var engine: DecryptEngine
     @Environment(\.dismiss) private var dismiss
@@ -430,18 +591,14 @@ struct LogSheet: View {
         NavigationStack {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 4) {
-                    ForEach(engine.log) { entry in
-                        LogRowView(entry: entry)
-                    }
+                    ForEach(engine.log) { LogRowView(entry: $0) }
                 }
                 .padding()
             }
             .navigationTitle("Job log")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                }
+                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
                 ToolbarItem(placement: .topBarLeading) {
                     ShareLink(item: engine.log.map { "\($0.level.rawValue.uppercased())\t\($0.text)" }.joined(separator: "\n")) {
                         Image(systemName: "square.and.arrow.up")
