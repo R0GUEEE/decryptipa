@@ -20,10 +20,15 @@ cp "$APP_SOURCES/AppStore/TwoFactor.swift" "$DEST/TwoFactor.swift"
 
 # The request funnel must delegate to the HTTP transport. A self-call here
 # compiles but recursively allocates until iOS jetsams the app on first login.
-rg -U -q '(?s)func perform\(_ request: URLRequest\).*?let \(data, response\) = try await http\.send\(request\)' \
-  "$APP_SOURCES/AppStore/AppStoreClient.swift" || {
-  echo "AppStoreClient.perform must dispatch to http.send (not itself)" >&2
-  exit 1
-}
+python3 - "$APP_SOURCES/AppStore/AppStoreClient.swift" <<'PYGUARD'
+from pathlib import Path
+import sys
+source = Path(sys.argv[1]).read_text()
+start = source.index("func perform(_ request: URLRequest)")
+end = source.index("// MARK: Bag", start)
+body = source[start:end]
+if "try await http.send(request)" not in body or "try await perform(request)" in body:
+    raise SystemExit("AppStoreClient.perform must dispatch to http.send (not itself)")
+PYGUARD
 
 swift run -c release LogicCheck
