@@ -101,7 +101,7 @@ extension AppStoreClient {
             let trimmed = first.trimmingCharacters(in: .whitespaces)
             let body = trimmed.isEmpty ? "no body" : String(trimmed.prefix(90))
             return "HTTP " + String(status) + " · " + body
-        case .rateLimited(let status):
+        case .rateLimited(let status, _):
             return "HTTP " + String(status) + " · rate limited"
         case .signIn(let message):
             return "failed · " + String(message.prefix(120))
@@ -233,7 +233,7 @@ extension AppStoreClient {
         }
 
         if response.statusCode == 429 {
-            throw AppStoreError.rateLimited(response.statusCode)
+            throw AppStoreError.rateLimited(response.statusCode, retryAfter: Self.retryAfterSeconds(response))
         }
 
         guard response.statusCode == 200 else {

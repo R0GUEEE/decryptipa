@@ -35,12 +35,12 @@ enum AppStoreError: LocalizedError {
     case needsAttestation
     case licenseRequired
     case blocked(Int, String)
-    case rateLimited(Int)
+    case rateLimited(Int, retryAfter: Int?)
 
     /// HTTP status carried by the failure, when there is one.
     var statusCode: Int? {
         switch self {
-        case .blocked(let status, _), .rateLimited(let status): return status
+        case .blocked(let status, _), .rateLimited(let status, _): return status
         default: return nil
         }
     }
@@ -67,8 +67,11 @@ enum AppStoreError: LocalizedError {
             if !detail.isEmpty { text += "\n" + detail }
             text += "\n\nApple's App Store endpoints now require a request signed by its own media-services framework (an SAP action signature). A sandboxed iOS app cannot produce that signature, and anisette headers alone do not change it. Two routes still work: import a session token minted by a signing client, or decrypt a copy already installed on the device."
             return text
-        case .rateLimited(let status):
-            return "Apple rate limited the request (HTTP \(status)). Wait a minute and try again."
+        case .rateLimited(let status, let retryAfter):
+            if let retryAfter, retryAfter > 0 {
+                return "Apple rate limited the request (HTTP " + String(status) + "). Try again in about " + String(retryAfter) + " seconds."
+            }
+            return "Apple rate limited the request (HTTP " + String(status) + "). Wait a minute and try again."
         }
     }
 }
@@ -206,6 +209,9 @@ final class AppStoreClient {
             request.setValue("application/xml", forHTTPHeaderField: "Accept")
             request.setValue(Self.configuratorUA, forHTTPHeaderField: "User-Agent")
             request.setValue("Software", forHTTPHeaderField: "X-Apple-Client-Application")
+            if let hint = Self.phoneStorefrontHint(for: email) {
+                request.setValue(hint, forHTTPHeaderField: "X-Apple-Store-Front")
+            }
             anisette?.apply(to: &request)
             request.httpBody = AppStorePlist.body([
                 "appleId": email,
@@ -253,7 +259,7 @@ final class AppStoreClient {
             }
 
             if response.statusCode == 429 {
-                throw AppStoreError.rateLimited(response.statusCode)
+                throw AppStoreError.rateLimited(response.statusCode, retryAfter: Self.retryAfterSeconds(response))
             }
 
             if response.statusCode == 401 || response.statusCode == 403 {
@@ -446,6 +452,8 @@ final class AppStoreClient {
         request.setValue(Self.configuratorUA, forHTTPHeaderField: "User-Agent")
         request.setValue(account.directoryServicesID, forHTTPHeaderField: "iCloud-DSID")
         request.setValue(account.directoryServicesID, forHTTPHeaderField: "X-Dsid")
+        request.setValue(account.passwordToken, forHTTPHeaderField: "X-Token")
+        request.setValue(account.storeFront, forHTTPHeaderField: "X-Apple-Store-Front")
         request.httpBody = AppStorePlist.body(values)
 
         let (data, response) = try await perform(request)
@@ -562,7 +570,18 @@ final class AppStoreClient {
 
     // MARK: Helpers
 
-    static let configuratorUA = "Configurator/2.15 (Macintosh; OS X 10.15.7; 16G29) AppleWebKit/605.1.15 (KHTML, like Gecko)"
+    static let configuratorUA = "Configurator/2.18 (Macintosh; OS X 15.3.2; 24D81) AppleWebKit/620.2.4.11.6"
+
+    /// Apple expects a storefront hint when the Apple ID is a phone number in
+    /// mainland China or India. Purely a routing hint; the ID is not altered.
+    static func phoneStorefrontHint(for appleID: String) -> String? {
+        var number = appleID.replacingOccurrences(of: " ", with: "").replacingOccurrences(of: "-", with: "")
+        if number.hasPrefix("+") { number.removeFirst() }
+        else if number.hasPrefix("00") { number.removeFirst(2) }
+        if number.hasPrefix("86"), number.count >= 13 { return "143465-2,29" }
+        if number.hasPrefix("91"), number.count >= 12 { return "143467-2,29" }
+        return nil
+    }
 
     private func podPrefix(_ account: AppStoreAccount) -> String {
         account.pod.isEmpty ? "" : "p\(account.pod)-"
@@ -575,6 +594,21 @@ final class AppStoreClient {
         components.path = path
         components.queryItems = [URLQueryItem(name: "guid", value: guid)]
         return components.url?.absoluteString
+    }
+
+    /// `Retry-After` is either a delta in seconds or an HTTP date.
+    static func retryAfterSeconds(_ response: HTTPURLResponse) -> Int? {
+        guard let raw = response.value(forHTTPHeaderField: "Retry-After")?.trimmingCharacters(in: .whitespaces),
+              !raw.isEmpty else { return nil }
+        if let seconds = Int(raw) { return max(0, min(seconds, 900)) }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "GMT")
+        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+        if let date = formatter.date(from: raw) {
+            return max(0, min(Int(date.timeIntervalSinceNow), 900))
+        }
+        return nil
     }
 
     static func isAllowedAuthEndpoint(_ raw: String) -> Bool {

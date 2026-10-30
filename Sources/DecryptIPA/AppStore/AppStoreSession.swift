@@ -252,8 +252,8 @@ final class AppStoreSession: ObservableObject {
                 }
             }
         } catch let error as AppStoreError {
-            if case .rateLimited = error {
-                retryAfter = Date().addingTimeInterval(90)
+            if case .rateLimited(_, let wait) = error {
+                retryAfter = Date().addingTimeInterval(TimeInterval(wait ?? 90))
                 append("Apple rate limited sign-in; pausing attempts until " + cooldownText + ".", .warn)
             }
             fail(error)

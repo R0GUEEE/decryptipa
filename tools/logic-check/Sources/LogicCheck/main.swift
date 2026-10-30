@@ -271,6 +271,12 @@ check(anisetteRotation.first?.url == anisetteOptions[2].url, "rotation begins at
 check(anisetteRotation.count == anisetteOptions.count, "rotation visits every public server once")
 check(Set(anisetteRotation.map(\.url)).count == anisetteOptions.count, "rotation has no duplicate endpoints")
 
+print("Apple authentication parity")
+check(AppStoreClient.phoneStorefrontHint(for: "+86 138 0013 8000") == "143465-2,29", "CN phone Apple ID gets a storefront hint")
+check(AppStoreClient.phoneStorefrontHint(for: "0091 98765 43210") == "143467-2,29", "IN phone Apple ID gets a storefront hint")
+check(AppStoreClient.phoneStorefrontHint(for: "dillinv@live.com") == nil, "email Apple ID gets no hint")
+check(AppStoreClient.phoneStorefrontHint(for: "+1 555 0100") == nil, "unrelated country gets no hint")
+
 print("App Store credential persistence")
 check(AppStoreCredentialPolicy.rememberedPassword("correct-horse", remember: true) == "correct-horse", "remembered password preserved")
 check(AppStoreCredentialPolicy.rememberedPassword("correct-horse", remember: false) == nil, "unremembered password discarded")
