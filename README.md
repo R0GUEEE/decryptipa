@@ -41,12 +41,60 @@ DecryptIPA (this app) ──ssh/sftp──▶ jailbroken iPhone
 * **Library** — outputs land in `Documents/Decrypted`, exposed through the
   Files app (`UIFileSharingEnabled`) and shareable from the Library tab.
 
-Both input modes are supported:
+Three input modes:
 
 | Mode | Needs | Notes |
 | --- | --- | --- |
 | **IPA file** | `appinst` + AppSync Unified | Installs the bundle, decrypts, optionally uninstalls afterwards. |
+| **App Store** | Apple ID, `appinst` + AppSync Unified | Resolves an identifier, downloads the encrypted IPA from Apple, then runs the same install + decrypt path. |
 | **Installed app** | bundle id only | Decrypts an app that is already on the device. Nothing is uploaded. |
+
+## App Store by identifier
+
+The App Store tab takes any of the three identifiers ipadecrypt accepts and
+turns it into a decrypted IPA without a desktop:
+
+* `com.burbn.instagram` — bundle id
+* `389801252` — numeric track id
+* `https://apps.apple.com/us/app/instagram/id389801252` — store link
+
+**Resolution** uses the public iTunes lookup API
+(`itunes.apple.com/lookup?bundleId=… | id=…`) — no Apple ID needed. It returns
+the track id for a bundle id (and the reverse), the current version, price,
+`minimumOsVersion`, artwork and size, and the storefront is selectable (25
+countries).
+
+**Sign-in** is a port of `internal/appstore.Login`: the bag is fetched from
+`init.itunes.apple.com/bag.xml`, the authenticate request is an XML plist POSTed
+to `buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/authenticate/`, and Apple's
+per-pod redirect is re-posted rather than followed. A `-5000` failure retries
+once; `MZFinance.BadLogin.Configurator_message` means two-factor, so the 6-digit
+code is appended to the password and submitted again — the same trick the
+desktop tool uses. The resulting `dsPersonId`, `passwordToken`,
+`X-Set-Apple-Store-Front` and `pod` are kept (token in the keychain) and reused.
+
+**Licence** — free apps are acquired with `buyProduct` (`X-Token`, `X-Dsid`,
+`X-Apple-Store-Front`) before download; `failureType 5002` and HTTP 500 are
+treated as "already owned". Paid apps must be owned already.
+
+**Download** asks `volumeStoreDownloadProduct` on the account's pod for a
+ticket, then falls back — exactly like `download.go` — to the bag's
+`redownloadProduct` and `updateProduct` dispatch endpoints. The ticket carries
+the signed CDN URL, the `sinfs` count and the version metadata; the bytes are
+streamed straight into `Documents/Imports` with progress. The IPA stays
+FairPlay-encrypted, is installed on the device with `appinst`, and is decrypted
+there by the same helper as a local file.
+
+### What still needs the desktop
+
+Apple's attested `ent/download` endpoint requires a FairPlay `kbsync` blob that
+ipadecrypt produces by emulating the macOS StoreAgent framework, plus a SAP
+action signature on authenticate. Neither exists on iOS, so for builds Apple
+ships **only** through that endpoint (post-2026-09 releases on many accounts)
+the app reports `needsAttestation` — an HTTP 403 from downloaddispatch — and
+offers one-tap "decrypt the copy installed on the device" plus the App Store
+link. Everything else in the chain (lookup, sign-in, 2FA, licence, legacy
+download, install, decrypt, verify) runs on the phone.
 
 ## Device requirements
 
@@ -89,11 +137,14 @@ patching, verification).
 Two gates run in CI:
 
 * `tools/logic-check` compiles the device-free logic (`MachO.swift`,
-  `Events.swift`) into a command-line harness and asserts it against synthetic
-  fixtures: `cryptid` in `LC_ENCRYPTION_INFO` / `LC_ENCRYPTION_INFO_64`, thin
-  arm64 + armv7 + fat images, an encryption command that sits after a large
-  `LC_SEGMENT_64`, version ordering (`1.2 < 1.10`), and `@evt` parsing with
-  quoted messages. It caught two real defects before the first release: a
+  `Events.swift`, `AppStoreLookup.swift`, `AppStoreClient.swift`) into a
+  command-line harness and asserts it against synthetic fixtures: `cryptid` in
+  `LC_ENCRYPTION_INFO` / `LC_ENCRYPTION_INFO_64`, thin arm64 + armv7 + fat
+  images, an encryption command that sits after a large `LC_SEGMENT_64`,
+  version ordering (`1.2 < 1.10`), `@evt` parsing with quoted messages, App
+  Store identifier forms (bundle id / track id / store link / free text
+  rejection), XML plist escaping and integer rendering, `<Document>`-wrapped and
+  bare-key/value response normalisation, and the auth-endpoint allowlist. It caught two real defects before the first release: a
   64-bit header-offset assumption in the fixture and `Version("abc")`
   silently parsing as `0`.
 * `ipa` builds the unsigned app, then fails the build unless
@@ -121,6 +172,12 @@ Sources/DecryptIPA/
   DevicesView.swift    device list + editor with connection test
   LibraryView.swift    output browser
   Components.swift     log console and small views
+  AppStore/
+    AppStoreLookup.swift   identifier parsing + public iTunes lookup
+    AppStoreClient.swift   bag, sign-in + 2FA, buyProduct, download tickets,
+                           CDN streaming, XML plist encode/normalise
+    AppStoreSession.swift  account persistence (keychain), GUID, storefront
+    AppStoreView.swift     identifier → account → download → hand off
 Resources/ipadecrypt-helper-arm64
 ```
 
