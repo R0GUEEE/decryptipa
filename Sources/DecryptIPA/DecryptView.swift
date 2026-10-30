@@ -113,7 +113,7 @@ struct DecryptView: View {
                 }
             } else {
                 Picker("Device", selection: Binding(
-                    get: { store.selectedID ?? store.devices[0].id },
+                    get: { store.selectedID ?? store.devices.first?.id ?? UUID() },
                     set: { store.selectedID = $0 }
                 )) {
                     ForEach(store.devices) { device in
@@ -250,7 +250,7 @@ struct DecryptView: View {
 
             if engine.isRunning {
                 if engine.phase == .uploading {
-                    ProgressView(value: engine.installProgress)
+                    ProgressView(value: min(1, max(0, engine.installProgress)))
                 } else {
                     ProgressView()
                         .progressViewStyle(.linear)
@@ -362,6 +362,8 @@ struct DecryptView: View {
         // An App Store IPA is FairPlay-encrypted exactly like a local one, so the
         // install-time Info.plist patching applies unchanged.
         let storeIPA = mode == .appStore ? appStoreSession.downloadedIPA : nil
+
+        Diagnostics.breadcrumb("job: start mode=\(mode.rawValue) device=\(device.endpoint) bundle=\(inputMetadata?.bundleID ?? bundleIDText) ipa=\(inputURL?.lastPathComponent ?? storeIPA?.lastPathComponent ?? "-")")
 
         let request = DecryptEngine.Request(
             device: device,

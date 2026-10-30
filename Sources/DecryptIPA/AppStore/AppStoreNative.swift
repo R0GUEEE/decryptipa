@@ -110,7 +110,10 @@ extension AppStoreClient {
         anisette: AnisetteHeaders,
         widgetKey: String
     ) async throws -> SignInOutcome {
-        var request = URLRequest(url: URL(string: Self.nativeAuthURL)!)
+        guard let authURL = URL(string: Self.nativeAuthURL) else {
+            throw AppStoreError.signIn("Bad native auth URL.")
+        }
+        var request = URLRequest(url: authURL)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")

@@ -4,6 +4,11 @@ import SwiftUI
 struct DecryptIPAApp: App {
     @StateObject private var deviceStore = DeviceStore()
     @StateObject private var library = LibraryStore()
+    @Environment(\.scenePhase) private var scenePhase
+
+    init() {
+        Diagnostics.install()
+    }
 
     var body: some Scene {
         WindowGroup {
@@ -11,6 +16,10 @@ struct DecryptIPAApp: App {
                 .environmentObject(deviceStore)
                 .environmentObject(library)
                 .onAppear { library.refresh() }
+                .onChange(of: scenePhase) { _, phase in
+                    Diagnostics.breadcrumb("scenePhase: \(phase)")
+                    if phase != .active { Diagnostics.flush() }
+                }
         }
     }
 }

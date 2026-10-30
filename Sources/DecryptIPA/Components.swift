@@ -34,24 +34,20 @@ struct LogConsole: View {
     let maxHeight: CGFloat
 
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 3) {
-                    ForEach(entries) { entry in
-                        LogRowView(entry: entry).id(entry.id)
-                    }
-                }
-                .padding(10)
-            }
-            .frame(maxHeight: maxHeight)
-            .onChange(of: entries.count) { _, _ in
-                if let last = entries.last {
-                    withAnimation(.easeOut(duration: 0.15)) {
-                        proxy.scrollTo(last.id, anchor: .bottom)
-                    }
+        // No ScrollViewReader / withAnimation here: scrolling a lazy stack from
+        // inside a Form row while the engine publishes updates crashes
+        // AttributeGraph with a cycle. A bottom-anchored ScrollView is enough.
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 3) {
+                ForEach(entries) { entry in
+                    LogRowView(entry: entry)
+                        .id(entry.id)
                 }
             }
+            .padding(10)
         }
+        .frame(maxHeight: maxHeight)
+        .defaultScrollAnchor(.bottom)
     }
 }
 

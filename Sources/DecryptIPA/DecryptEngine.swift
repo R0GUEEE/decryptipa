@@ -43,7 +43,9 @@ final class DecryptEngine: ObservableObject {
         var outputDirectory: URL
     }
 
-    @Published private(set) var phase: JobPhase = .idle
+    @Published private(set) var phase: JobPhase = .idle {
+        didSet { Diagnostics.breadcrumb("phase: \(phase.title)") }
+    }
     @Published private(set) var log: [LogEntry] = []
     @Published private(set) var receivedBytes: Int64 = 0
     @Published private(set) var imagesDone: Int = 0
@@ -60,6 +62,8 @@ final class DecryptEngine: ObservableObject {
     private var transport: SSHTransport?
     private var startedAt: Date?
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
+    private var pendingLog: [LogEntry] = []
+    private var flushScheduled = false
 
     var isRunning: Bool { task != nil }
 
@@ -103,6 +107,8 @@ final class DecryptEngine: ObservableObject {
 
     private func reset() {
         log.removeAll()
+        pendingLog.removeAll()
+        flushScheduled = false
         phase = .connecting
         receivedBytes = 0
         imagesDone = 0
@@ -116,8 +122,30 @@ final class DecryptEngine: ObservableObject {
 
     // MARK: Logging
 
+    /// Coalesces bursts of helper events into ~8 publishes per second. The
+    /// decrypt stream can emit hundreds of lines; publishing each one re-lays
+    /// out the Form while the engine is still writing bytes.
     private func append(_ text: String, _ level: LogLevel = .info) {
-        log.append(LogEntry(level: level, text: text))
+        pendingLog.append(LogEntry(level: level, text: text))
+
+        if pendingLog.count >= 120 {
+            flushLog()
+            return
+        }
+        if !flushScheduled {
+            flushScheduled = true
+            Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 120_000_000)
+                self?.flushLog()
+            }
+        }
+    }
+
+    private func flushLog() {
+        flushScheduled = false
+        guard !pendingLog.isEmpty else { return }
+        log.append(contentsOf: pendingLog)
+        pendingLog.removeAll(keepingCapacity: true)
         if log.count > 800 { log.removeFirst(log.count - 800) }
     }
 
@@ -129,6 +157,7 @@ final class DecryptEngine: ObservableObject {
 
     private func perform(_ request: Request) async {
         defer {
+            flushLog()
             refreshElapsed()
             let transport = self.transport
             self.transport = nil

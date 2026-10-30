@@ -193,7 +193,8 @@ struct AppleIDTwoFactor {
     }
 
     func sessionState(email: String, sessionID: String, scnt: String) async throws -> TwoFactorChallenge {
-        var request = URLRequest(url: URL(string: Self.base)!)
+        guard let url = URL(string: Self.base) else { throw appFailure("Bad auth URL.") }
+        var request = URLRequest(url: url)
         request.httpMethod = "GET"
         applySession(to: &request, sessionID: sessionID, scnt: scnt)
         request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -215,7 +216,8 @@ struct AppleIDTwoFactor {
     /// `PUT /auth/verify/phone {"phoneNumber":{"id":N},"mode":"sms"}` — Apple
     /// texts the code to that number.
     func sendText(to phoneID: Int, sessionID: String, scnt: String) async throws {
-        var request = URLRequest(url: URL(string: Self.base + "/verify/phone")!)
+        guard let url = URL(string: Self.base + "/verify/phone") else { throw appFailure("Bad auth URL.") }
+        var request = URLRequest(url: url)
         request.httpMethod = "PUT"
         applySession(to: &request, sessionID: sessionID, scnt: scnt)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -234,7 +236,8 @@ struct AppleIDTwoFactor {
     /// `PUT /auth/verify/trusteddevice` — ask Apple to push the prompt to the
     /// trusted devices.
     func promptTrustedDevice(sessionID: String, scnt: String) async throws {
-        var request = URLRequest(url: URL(string: Self.base + "/verify/trusteddevice")!)
+        guard let url = URL(string: Self.base + "/verify/trusteddevice") else { throw appFailure("Bad auth URL.") }
+        var request = URLRequest(url: url)
         request.httpMethod = "PUT"
         applySession(to: &request, sessionID: sessionID, scnt: scnt)
         request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -247,7 +250,8 @@ struct AppleIDTwoFactor {
 
     /// `POST /auth/verify/phone/securitycode` — verify an SMS code.
     func verifyText(code: String, phoneID: Int, sessionID: String, scnt: String) async throws {
-        var request = URLRequest(url: URL(string: Self.base + "/verify/phone/securitycode")!)
+        guard let url = URL(string: Self.base + "/verify/phone/securitycode") else { throw appFailure("Bad auth URL.") }
+        var request = URLRequest(url: url)
         request.httpMethod = "POST"
         applySession(to: &request, sessionID: sessionID, scnt: scnt)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -264,7 +268,8 @@ struct AppleIDTwoFactor {
 
     /// `POST /auth/verify/trusteddevice/securitycode`.
     func verifyTrustedDevice(code: String, sessionID: String, scnt: String) async throws {
-        var request = URLRequest(url: URL(string: Self.base + "/verify/trusteddevice/securitycode")!)
+        guard let url = URL(string: Self.base + "/verify/trusteddevice/securitycode") else { throw appFailure("Bad auth URL.") }
+        var request = URLRequest(url: url)
         request.httpMethod = "POST"
         applySession(to: &request, sessionID: sessionID, scnt: scnt)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")

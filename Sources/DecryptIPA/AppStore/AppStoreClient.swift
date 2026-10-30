@@ -308,8 +308,10 @@ final class AppStoreClient {
         guard let account else { throw AppStoreError.signIn("Sign in to the App Store first.") }
         guard app.isFree else { throw AppStoreError.notOwned }
 
-        let url = "https://\(podPrefix(account))buy.itunes.apple.com\(Self.purchasePath)"
-        var request = URLRequest(url: URL(string: url)!)
+        guard let purchaseURL = URL(string: "https://\(podPrefix(account))buy.itunes.apple.com\(Self.purchasePath)") else {
+            throw AppStoreError.signIn("Could not build the licence URL.")
+        }
+        var request = URLRequest(url: purchaseURL)
         request.httpMethod = "POST"
         request.setValue("application/x-apple-plist", forHTTPHeaderField: "Content-Type")
         request.setValue("application/xml", forHTTPHeaderField: "Accept")

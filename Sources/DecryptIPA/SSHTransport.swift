@@ -69,6 +69,8 @@ final class SSHTransport: @unchecked Sendable {
             auth = .ed25519(username: profile.username, privateKey: key)
         }
 
+        Diagnostics.breadcrumb("ssh: connect \(profile.endpoint) auth=\(profile.auth.rawValue) sudo=\(profile.effectiveUsesSudo)")
+
         let client: SSHClient
         do {
             client = try await SSHClient.connect(
@@ -82,6 +84,8 @@ final class SSHTransport: @unchecked Sendable {
         } catch {
             throw appFailure("SSH connect to \(profile.endpoint) failed: \(error)")
         }
+
+        Diagnostics.breadcrumb("ssh: connected \(profile.endpoint)")
 
         var sudoPath: String?
         let transport = SSHTransport(client: client, profile: profile, sudoPasswordPath: nil)

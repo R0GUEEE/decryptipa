@@ -3,6 +3,7 @@ import SwiftUI
 struct LibraryView: View {
     @EnvironmentObject private var library: LibraryStore
     @State private var pendingDelete: LibraryStore.Item?
+    @State private var showingDiagnostics = false
 
     var body: some View {
         NavigationStack {
@@ -50,12 +51,24 @@ struct LibraryView: View {
             .navigationTitle("Library")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        library.refresh()
+                    Menu {
+                        Button {
+                            library.refresh()
+                        } label: {
+                            Label("Refresh", systemImage: "arrow.clockwise")
+                        }
+                        Button {
+                            showingDiagnostics = true
+                        } label: {
+                            Label("Diagnostics & crash logs", systemImage: "stethoscope")
+                        }
                     } label: {
-                        Image(systemName: "arrow.clockwise")
+                        Image(systemName: "ellipsis.circle")
                     }
                 }
+            }
+            .sheet(isPresented: $showingDiagnostics) {
+                DiagnosticsView()
             }
             .onAppear { library.refresh() }
             .confirmationDialog(
