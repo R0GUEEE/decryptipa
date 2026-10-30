@@ -1,40 +1,105 @@
 import Foundation
 import UIKit
 
-/// Crash + breadcrumb capture.
-///
-/// The app cannot be debugged from a desk, so the two things that make a field
-/// crash actionable are recorded here:
-///
-///  * **breadcrumbs** — a ring of timestamped lines (job start, phase changes,
-///    SSH connect, upload, install, stream, verify) rewritten to
-///    `Documents/Logs/last-run.txt` whenever one is added. After a crash this
-///    file shows exactly how far the job got.
-///  * **crash reports** — an uncaught-exception handler writes name, reason and
-///    the call stack symbols to `Documents/Logs/crash-<date>.txt`, and the fatal
-///    signal handlers append a one-line marker (they only use `write(2)` on a
-///    file descriptor opened at launch, so they stay safe inside a handler).
-enum Diagnostics {
-    private static let lock = NSLock()
-    private static var breadcrumbs: [String] = []
-    private static let maximumBreadcrumbs = 240
+// MARK: - File-scope state
+//
+// The signal and exception handlers must be plain C function pointers, so they
+// cannot capture anything: all state they touch lives at file scope.
 
-    /// Opened once at launch so the signal handler never has to resolve a path.
-    private static var signalFD: Int32 = -1
+private let diagnosticsLock = NSLock()
+private var diagnosticsBreadcrumbs: [String] = []
+private let diagnosticsMaxBreadcrumbs = 240
+private var diagnosticsSignalFD: Int32 = -1
 
-    static var logDirectory: URL {
-        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let directory = documents.appendingPathComponent("Logs", isDirectory: true)
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        return directory
+private let diagnosticsSigAbrt: StaticString = "fatal signal SIGABRT — see last-run.txt\n"
+private let diagnosticsSigSegv: StaticString = "fatal signal SIGSEGV — see last-run.txt\n"
+private let diagnosticsSigBus: StaticString = "fatal signal SIGBUS — see last-run.txt\n"
+private let diagnosticsSigIll: StaticString = "fatal signal SIGILL — see last-run.txt\n"
+private let diagnosticsSigFpe: StaticString = "fatal signal SIGFPE — see last-run.txt\n"
+private let diagnosticsSigTrap: StaticString = "fatal signal SIGTRAP — see last-run.txt\n"
+private let diagnosticsSigOther: StaticString = "fatal signal — see last-run.txt\n"
+
+private func diagnosticsLogDirectory() -> URL {
+    let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+    let directory = documents.appendingPathComponent("Logs", isDirectory: true)
+    try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    return directory
+}
+
+private func diagnosticsBreadcrumbText() -> String {
+    diagnosticsLock.lock()
+    defer { diagnosticsLock.unlock() }
+    return diagnosticsBreadcrumbs.joined(separator: "\n")
+}
+
+private func diagnosticsWriteReport(prefix: String, contents: String) {
+    let formatter = DateFormatter()
+    formatter.dateFormat = "yyyyMMdd-HHmmss"
+    let name = "\(prefix)-\(formatter.string(from: Date())).txt"
+    let url = diagnosticsLogDirectory().appendingPathComponent(name)
+    try? Data(contents.utf8).write(to: url, options: .atomic)
+}
+
+/// Appends the fatal signal to `crash-signal.txt` with only `write(2)` on a
+/// descriptor opened at launch, then restores the default action and re-raises
+/// so the system still produces its own report.
+private func diagnosticsSignalHandler(_ received: Int32) {
+    let message: StaticString
+    switch received {
+    case SIGABRT: message = diagnosticsSigAbrt
+    case SIGSEGV: message = diagnosticsSigSegv
+    case SIGBUS: message = diagnosticsSigBus
+    case SIGILL: message = diagnosticsSigIll
+    case SIGFPE: message = diagnosticsSigFpe
+    case SIGTRAP: message = diagnosticsSigTrap
+    default: message = diagnosticsSigOther
     }
 
-    // MARK: Install
+    if diagnosticsSignalFD >= 0 {
+        _ = write(diagnosticsSignalFD, message.utf8Start, message.utf8CodeUnitCount)
+    }
+
+    signal(received, SIG_DFL)
+    raise(received)
+}
+
+private func diagnosticsExceptionHandler(_ exception: NSException) {
+    var report = "Uncaught exception\n"
+    report += "name: \(exception.name.rawValue)\n"
+    report += "reason: \(exception.reason ?? "-")\n"
+    report += "userInfo: \(exception.userInfo ?? [:])\n\n"
+    report += "call stack symbols:\n"
+    report += Thread.callStackSymbols.joined(separator: "\n")
+    report += "\n\nbreadcrumbs:\n"
+    report += diagnosticsBreadcrumbText()
+
+    diagnosticsWriteReport(prefix: "crash-exception", contents: report)
+}
+
+// MARK: - Public API
+
+/// Crash + breadcrumb capture for a field build that cannot be debugged live.
+///
+///  * every phase change and transport step appends a timestamped breadcrumb and
+///    rewrites `Documents/Logs/last-run.txt`, so the file always shows the last
+///    thing the app did;
+///  * uncaught exceptions write name, reason and call-stack symbols to
+///    `Documents/Logs/crash-exception-*.txt`;
+///  * fatal signals append one line to `crash-signal.txt`.
+///
+/// Both are visible in Library → ⋯ → Diagnostics & crash logs.
+enum Diagnostics {
+    static var logDirectory: URL { diagnosticsLogDirectory() }
 
     static func install() {
-        openSignalFile()
-        installExceptionHandler()
-        installSignalHandlers()
+        let path = diagnosticsLogDirectory().appendingPathComponent("crash-signal.txt").path
+        diagnosticsSignalFD = open(path, O_WRONLY | O_CREAT | O_APPEND, 0o644)
+
+        NSSetUncaughtExceptionHandler(diagnosticsExceptionHandler)
+
+        for value in [SIGABRT, SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGTRAP] as [Int32] {
+            signal(value, diagnosticsSignalHandler)
+        }
 
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
@@ -42,98 +107,36 @@ enum Diagnostics {
         flush()
     }
 
-    private static func openSignalFile() {
-        let path = logDirectory.appendingPathComponent("crash-signal.txt").path
-        signalFD = open(path, O_WRONLY | O_CREAT | O_APPEND, 0o644)
-    }
-
-    private static func installExceptionHandler() {
-        NSSetUncaughtExceptionHandler { exception in
-            var report = "Uncaught exception\n"
-            report += "name: \(exception.name.rawValue)\n"
-            report += "reason: \(exception.reason ?? "-")\n"
-            report += "userInfo: \(exception.userInfo ?? [:])\n\n"
-            report += "call stack symbols:\n"
-            report += Thread.callStackSymbols.joined(separator: "\n")
-            report += "\n\nbreadcrumbs:\n"
-            report += currentBreadcrumbs()
-
-            writeReport(named: "crash-exception") { report }
-        }
-    }
-
-    private static func installSignalHandlers() {
-        let signals: [Int32] = [SIGABRT, SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGTRAP]
-
-        for value in signals {
-            signal(value, { received in
-                let message = signalMessage(for: received)
-                if Diagnostics.signalFD >= 0 {
-                    message.withCString { pointer in
-                        _ = write(Diagnostics.signalFD, pointer, strlen(pointer))
-                    }
-                }
-                signal(received, SIG_DFL)
-                raise(received)
-            })
-        }
-    }
-
-    private static func signalMessage(for signalNumber: Int32) -> String {
-        switch signalNumber {
-        case SIGABRT: return "fatal signal SIGABRT — see last-run.txt\n"
-        case SIGSEGV: return "fatal signal SIGSEGV — see last-run.txt\n"
-        case SIGBUS: return "fatal signal SIGBUS — see last-run.txt\n"
-        case SIGILL: return "fatal signal SIGILL — see last-run.txt\n"
-        case SIGFPE: return "fatal signal SIGFPE — see last-run.txt\n"
-        case SIGTRAP: return "fatal signal SIGTRAP — see last-run.txt\n"
-        default: return "fatal signal — see last-run.txt\n"
-        }
-    }
-
-    // MARK: Breadcrumbs
-
     static func breadcrumb(_ text: String) {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm:ss.SSS"
+        let line = "\(formatter.string(from: Date()))  \(text)"
 
-        lock.lock()
-        breadcrumbs.append("\(formatter.string(from: Date()))  \(text)")
-        if breadcrumbs.count > maximumBreadcrumbs {
-            breadcrumbs.removeFirst(breadcrumbs.count - maximumBreadcrumbs)
+        diagnosticsLock.lock()
+        diagnosticsBreadcrumbs.append(line)
+        if diagnosticsBreadcrumbs.count > diagnosticsMaxBreadcrumbs {
+            diagnosticsBreadcrumbs.removeFirst(diagnosticsBreadcrumbs.count - diagnosticsMaxBreadcrumbs)
         }
-        lock.unlock()
+        diagnosticsLock.unlock()
 
         flush()
     }
 
     static func currentBreadcrumbs() -> String {
-        lock.lock()
-        defer { lock.unlock() }
-        return breadcrumbs.joined(separator: "\n")
+        diagnosticsBreadcrumbText()
     }
 
-    /// Rewrites the breadcrumb file so it is always current, even if the process
-    /// dies in the next instruction.
+    /// Rewrites the breadcrumb file so it is current even if the process dies in
+    /// the next instruction.
     static func flush() {
-        let contents = "DecryptIPA last run\n\n" + currentBreadcrumbs() + "\n"
-        let url = logDirectory.appendingPathComponent("last-run.txt")
+        let contents = "DecryptIPA last run\n\n" + diagnosticsBreadcrumbText() + "\n"
+        let url = diagnosticsLogDirectory().appendingPathComponent("last-run.txt")
         try? Data(contents.utf8).write(to: url, options: .atomic)
-    }
-
-    // MARK: Reports
-
-    private static func writeReport(named prefix: String, body: () -> String) {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyyMMdd-HHmmss"
-        let name = "\(prefix)-\(formatter.string(from: Date())).txt"
-        let url = logDirectory.appendingPathComponent(name)
-        try? Data(body().utf8).write(to: url, options: .atomic)
     }
 
     static func reports() -> [URL] {
         let files = (try? FileManager.default.contentsOfDirectory(
-            at: logDirectory,
+            at: diagnosticsLogDirectory(),
             includingPropertiesForKeys: [.contentModificationDateKey],
             options: [.skipsHiddenFiles]
         )) ?? []
