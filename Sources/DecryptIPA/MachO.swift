@@ -130,7 +130,7 @@ struct Version: Comparable, CustomStringConvertible {
 
     init?(_ raw: String) {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
+        guard !trimmed.isEmpty, let first = trimmed.first, first.isNumber else { return nil }
         let numeric = trimmed.split(separator: ".").map { component -> Int in
             Int(component.prefix(while: { $0.isNumber })) ?? 0
         }

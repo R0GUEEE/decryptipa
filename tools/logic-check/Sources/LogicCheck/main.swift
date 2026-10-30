@@ -41,8 +41,7 @@ func thin64(cryptid: UInt32, extraCommands: [(UInt32, [UInt8])] = []) -> Data {
         commandCount += 1
     }
 
-    let cryptSize = UInt32(16)
-    body += le32(0x2C) + le32(cryptSize) + le32(0x4000) + le32(0x8000) + le32(cryptid) + le32(0)
+    body += le32(0x2C) + le32(24) + le32(0x4000) + le32(0x8000) + le32(cryptid) + le32(0)
     commandCount += 1
 
     var header: [UInt8] = []
@@ -53,8 +52,7 @@ func thin64(cryptid: UInt32, extraCommands: [(UInt32, [UInt8])] = []) -> Data {
     header += le32(commandCount)
     header += le32(UInt32(body.count))
     header += le32(0x00200085)      // flags
-    header += le32(0)
-    header += le64(0x100000000)
+    header += le32(0)               // reserved
 
     let total = UInt32(header.count + body.count)
     var padded = header + body
