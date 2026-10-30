@@ -190,6 +190,21 @@ key parsing, SHA-256 of the helper), and
 [ZIPFoundation](https://github.com/weichsel/ZIPFoundation) (IPA inspection,
 patching, verification).
 
+## Crash reports
+
+Library → **⋯ → Diagnostics & crash logs** (or `Documents/Logs`):
+
+* `last-run.txt` — rewritten on every phase change and transport step
+  (launch, job start with device/bundle/mode, SSH connect/connected, upload,
+  install, stream, verify, save). After a crash it shows the last thing the app
+  did.
+* `crash-exception-*.txt` — from `NSSetUncaughtExceptionHandler`: name, reason,
+  `Thread.callStackSymbols`, plus the breadcrumb tail.
+* `crash-signal.txt` — appended by the `SIGABRT/SEGV/BUS/ILL/FPE/TRAP` handlers,
+  which only call `write(2)` on a descriptor opened at launch.
+
+"Share everything" exports all of it in one paste.
+
 ## Verification
 
 Two gates run in CI:
