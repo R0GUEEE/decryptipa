@@ -254,7 +254,7 @@ let anisetteOptions = AnisetteServerOption.publicOptions
 let anisetteRotation = AnisetteServerOption.rotated(anisetteOptions, startingAt: anisetteOptions[2].url)
 check(anisetteRotation.first?.url == anisetteOptions[2].url, "rotation begins at selected server")
 check(anisetteRotation.count == anisetteOptions.count, "rotation visits every public server once")
-check(Set(anisetteRotation.map(\\.url)).count == anisetteOptions.count, "rotation has no duplicate endpoints")
+check(Set(anisetteRotation.map(\.url)).count == anisetteOptions.count, "rotation has no duplicate endpoints")
 
 print("App Store credential persistence")
 check(AppStoreCredentialPolicy.rememberedPassword("correct-horse", remember: true) == "correct-horse", "remembered password preserved")

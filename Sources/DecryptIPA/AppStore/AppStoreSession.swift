@@ -480,6 +480,7 @@ final class AppStoreSession: ObservableObject {
     private func provisionAutomaticAnisette(at preferredURL: URL) async throws -> AnisetteHeaders {
         await refreshPublicAnisetteServers()
 
+        let preferred = preferredURL.absoluteString
         var candidates = AnisetteServerOption.rotated(anisetteServerOptions, startingAt: preferred)
         if !candidates.contains(where: { $0.url == preferred }) {
             candidates.insert(AnisetteServerOption(name: "Selected", url: preferred), at: 0)
