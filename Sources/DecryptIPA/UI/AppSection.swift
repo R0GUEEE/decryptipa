@@ -29,10 +29,17 @@ struct AppSection: View {
     let canDecrypt: Bool
     let onDecrypt: () -> Void
     let onCancel: () -> Void
+    /// Lists the apps installed on the device, so a bundle id never has to be
+    /// typed by hand.
+    var loadInstalledApps: () async throws -> [DeviceService.InstalledSummary] = { [] }
 
     @State private var searchText = ""
     @State private var showingImporter = false
     @State private var importError: String?
+    @State private var showingInstalled = false
+    @State private var installedApps: [DeviceService.InstalledSummary] = []
+    @State private var loadingInstalled = false
+    @State private var installedError: String?
 
     var body: some View {
         Card {
@@ -288,6 +295,11 @@ struct AppSection: View {
 
     private var installedBody: some View {
         VStack(alignment: .leading, spacing: 8) {
+            QuietButton(title: loadingInstalled ? "Reading device…" : "Choose from installed apps", icon: "list.bullet") {
+                showingInstalled = true
+                Task { await loadInstalled() }
+            }
+
             FieldShell {
                 TextField("com.example.app", text: $bundleIDText)
                     .font(.body.monospaced())
@@ -296,7 +308,35 @@ struct AppSection: View {
                     .foregroundStyle(Palette.ink)
             }
             EmptyNote(text: "No upload and no install: the helper decrypts the existing bundle in place.")
+            if let installedError {
+                Text(installedError).font(.caption2).foregroundStyle(Palette.warning)
+            }
         }
+        .sheet(isPresented: $showingInstalled) {
+            InstalledAppsSheet(
+                apps: installedApps,
+                loading: loadingInstalled,
+                error: installedError
+            ) { summary in
+                bundleIDText = summary.bundleID
+                showingInstalled = false
+            }
+        }
+    }
+
+    private func loadInstalled() async {
+        guard installedApps.isEmpty else { return }
+        loadingInstalled = true
+        installedError = nil
+        do {
+            installedApps = try await loadInstalledApps()
+            if installedApps.isEmpty {
+                installedError = "The device reported no installed apps."
+            }
+        } catch {
+            installedError = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+        }
+        loadingInstalled = false
     }
 
     // MARK: Run

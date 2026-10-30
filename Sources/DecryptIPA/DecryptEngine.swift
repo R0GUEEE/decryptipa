@@ -306,6 +306,14 @@ final class DecryptEngine: ObservableObject {
                     throw appFailure("appinst is required to install the bundle: install AppSync Unified + appinst on the device.")
                 }
 
+                if !request.options.patchForInstall,
+                   let minOS = Version(metadata?.minimumOS ?? ""),
+                   let deviceVersion = Version(probe.iosVersion),
+                   minOS > deviceVersion {
+                    throw appFailure("This IPA needs iOS " + minOS.text + " but the device runs " + deviceVersion.text +
+                                     ". Enable \"Patch Info.plist for this device\" or install an older build.")
+                }
+
                 var uploadURL = ipa
                 if request.options.patchForInstall {
                     phase = .preparing
@@ -425,6 +433,12 @@ final class DecryptEngine: ObservableObject {
         guard sink.bytes > 0 else {
             try? FileManager.default.removeItem(at: partialURL)
             throw appFailure("The helper produced no IPA bytes — check the device log above.")
+        }
+
+        guard IPATool.looksComplete(partialURL) else {
+            try? FileManager.default.removeItem(at: partialURL)
+            throw appFailure("The received IPA is incomplete (" + ByteCountFormatter.string(fromByteCount: sink.bytes, countStyle: .file) +
+                             "). The SSH stream ended early — check the device log, then retry.")
         }
 
         append("Received \(ByteCountFormatter.string(fromByteCount: sink.bytes, countStyle: .file)) · \(imagesDone) image(s) decrypted\(imagesFailed > 0 ? ", \(imagesFailed) failed" : "")", .success)

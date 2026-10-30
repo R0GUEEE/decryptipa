@@ -179,6 +179,20 @@ enum IPATool {
 
     // MARK: Verify
 
+    /// A truncated or aborted stream still produces a non-empty file. Opening it
+    /// as a zip and finding a Payload bundle is the cheapest real integrity check.
+    static func looksComplete(_ url: URL) -> Bool {
+        guard let archive = Archive(url: url, accessMode: .read) else { return false }
+        var payloadEntries = 0
+        for entry in archive {
+            if entry.path.hasPrefix("Payload/") {
+                payloadEntries += 1
+                if payloadEntries > 1 { return true }
+            }
+        }
+        return payloadEntries > 0
+    }
+
     struct VerifyReport {
         var checked = 0
         var plaintext = 0

@@ -165,6 +165,52 @@ final class DeviceService {
         return nil
     }
 
+    struct InstalledSummary: Identifiable, Hashable {
+        var id: String { bundleID }
+        let bundleID: String
+        let name: String
+        let version: String
+    }
+
+    /// Enumerates user apps on the device so the picker does not require the
+    /// user to know a bundle identifier by heart. One SSH round trip: PlistBuddy
+    /// is present on every iOS install.
+    func listInstalledApps() async throws -> [InstalledSummary] {
+        let script = """
+        for f in /var/containers/Bundle/Application/*/*.app/Info.plist; do
+          [ -f "$f" ] || continue
+          id=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$f" 2>/dev/null) || continue
+          name=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$f" 2>/dev/null)
+          [ -n "$name" ] || name=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleName' "$f" 2>/dev/null)
+          ver=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$f" 2>/dev/null)
+          printf '%s|%s|%s\n' "$id" "$name" "$ver"
+        done
+        """
+
+        let result = try await transport.runPrivileged(script)
+        guard result.ok || !result.stdout.isEmpty else {
+            throw appFailure("Could not list installed apps (exit \(result.exitCode)): \(result.stderr.suffix(200))")
+        }
+
+        var seen = Set<String>()
+        var apps: [InstalledSummary] = []
+        for line in result.stdout.split(separator: "\n") {
+            let parts = line.split(separator: "|", omittingEmptySubsequences: false)
+            guard parts.count >= 1 else { continue }
+            let bundleID = String(parts[0]).trimmingCharacters(in: .whitespaces)
+            guard !bundleID.isEmpty, seen.insert(bundleID).inserted else { continue }
+            let name = parts.count > 1 ? String(parts[1]).trimmingCharacters(in: .whitespaces) : ""
+            let version = parts.count > 2 ? String(parts[2]).trimmingCharacters(in: .whitespaces) : ""
+            apps.append(InstalledSummary(
+                bundleID: bundleID,
+                name: name.isEmpty ? bundleID : name,
+                version: version
+            ))
+        }
+
+        return apps.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
     func installedVersion(bundlePath: String) async throws -> String {
         let result = try await transport.runData("cat \(shellQuote(bundlePath + "/Info.plist"))", privileged: true)
         guard result.exitCode == 0 else {

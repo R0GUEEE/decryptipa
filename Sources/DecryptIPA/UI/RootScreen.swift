@@ -156,7 +156,8 @@ struct RootScreen: View {
                     bundleIDText: $bundleIDText,
                     canDecrypt: canDecrypt,
                     onDecrypt: startJob,
-                    onCancel: { engine.cancel() }
+                    onCancel: { engine.cancel() },
+                    loadInstalledApps: { try await listInstalledApps() }
                 )
             } else {
                 loadingCard
@@ -292,6 +293,18 @@ struct RootScreen: View {
             format: "root appeared · step=%d · %d device(s) · %d output(s) · footprint %.1f MB",
             step, store.devices.count, library.items.count, Diagnostics.memoryFootprintMB
         ))
+    }
+
+    /// Opens a short-lived session just to inventory the device.
+    private func listInstalledApps() async throws -> [DeviceService.InstalledSummary] {
+        guard let device = store.selected else {
+            throw appFailure("Add a jailbroken device first.")
+        }
+        Diagnostics.breadcrumb("listing installed apps · " + device.endpoint)
+        let transport = try await SSHTransport.connect(profile: device, secrets: store.secrets(for: device))
+        defer { Task { await transport.close() } }
+        let service = DeviceService(transport: transport)
+        return try await service.listInstalledApps()
     }
 
     // MARK: Job
