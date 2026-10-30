@@ -76,9 +76,51 @@ struct AppStoreApp: Identifiable, Hashable {
     }
 }
 
-// MARK: - Public lookup (no account required)
-
+struct AppStoreSearchResult: Identifiable, Hashable {
+    var id: Int64 { app.trackID }
+    let app: AppStoreApp
+}
 enum AppStoreLookup {
+    static func search(_ term: String, country: String, limit: Int = 30) async throws -> [AppStoreApp] {
+        var components = URLComponents(string: "https://itunes.apple.com/search")!
+        components.queryItems = [
+            URLQueryItem(name: "term", value: term),
+            URLQueryItem(name: "country", value: country.lowercased()),
+            URLQueryItem(name: "entity", value: "software"),
+            URLQueryItem(name: "limit", value: String(min(max(limit, 1), 50)))
+        ]
+        guard let url = components.url else { throw appFailure("Could not build App Store search URL.") }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 30
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw appFailure("App Store search failed (HTTP " + String((response as? HTTPURLResponse)?.statusCode ?? -1) + ").")
+        }
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let results = root["results"] as? [[String: Any]] else {
+            throw appFailure("App Store search returned an unreadable response.")
+        }
+        return results.compactMap(parseApp).filter { !$0.bundleID.isEmpty && $0.trackID > 0 }
+    }
+
+    private static func parseApp(_ first: [String: Any]) -> AppStoreApp? {
+        guard let trackID = (first["trackId"] as? NSNumber)?.int64Value else { return nil }
+        return AppStoreApp(
+            trackID: trackID,
+            bundleID: (first["bundleId"] as? String) ?? "",
+            name: (first["trackName"] as? String) ?? (first["bundleId"] as? String) ?? "Unknown",
+            seller: (first["sellerName"] as? String) ?? (first["artistName"] as? String) ?? "",
+            version: (first["version"] as? String) ?? "?",
+            price: (first["price"] as? NSNumber)?.doubleValue ?? 0,
+            minimumOS: (first["minimumOsVersion"] as? String) ?? "?",
+            artworkURL: (first["artworkUrl100"] as? String).flatMap(URL.init(string:)),
+            storeURL: (first["trackViewUrl"] as? String).flatMap(URL.init(string:)),
+            fileSizeBytes: (first["fileSizeBytes"] as? NSNumber)?.int64Value
+                ?? (first["fileSizeBytes"] as? String).flatMap { Int64($0) }
+        )
+    }
+
     /// `GET https://itunes.apple.com/lookup` — the same public endpoint the web
     /// store uses. Gives us the track id for a bundle id (and vice versa) plus
     /// the current version, price and artwork, without any Apple ID.

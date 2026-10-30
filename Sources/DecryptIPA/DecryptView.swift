@@ -33,7 +33,10 @@ struct DecryptView: View {
     @State private var showingLog = false
     @State private var showingDevices = false
     @State private var showingAppStore = false
+    @State private var showingSignIn = false
     @State private var showingDiagnostics = false
+    @State private var showingAdvanced = false
+    @State private var appSearchText = ""
 
     private let ink = Color(red: 0.92, green: 0.94, blue: 0.98)
     private let canvas = Color(red: 0.055, green: 0.065, blue: 0.085)
@@ -46,11 +49,12 @@ struct DecryptView: View {
                     headerCard
                     deviceCard
                     inputCard
-                    appStoreCard
+                    accountCard
+                    appPickerCard
                     if engine.isRunning || !engine.log.isEmpty { progressCard }
                     if let url = engine.outputURL { resultCard(url) }
-                    optionsCard
                     actionCard
+                    optionsCard
                     footer
                 }
                 .padding(.horizontal, 16)
@@ -97,6 +101,12 @@ struct DecryptView: View {
             .sheet(isPresented: $showingLog) { LogSheet(engine: engine) }
             .sheet(isPresented: $showingDevices) { DevicesView() }
             .sheet(isPresented: $showingDiagnostics) { DiagnosticsView() }
+            .sheet(isPresented: $showingSignIn) {
+                if let session = appStoreSession { SignInView(session: session) }
+            }
+            .sheet(isPresented: $showingAdvanced) {
+                if let session = appStoreSession { AnisetteSettingsView(session: session) }
+            }
             .sheet(isPresented: $showingAppStore) {
                 if let session = appStoreSession {
                     AppStoreView(
@@ -270,63 +280,85 @@ struct DecryptView: View {
     /// Apple account login/download lives in its own card and sheet, not as an
     /// input mode. The IPA only enters the decrypt flow after the user taps the
     /// explicit "Use downloaded IPA" action in AppStoreView.
-    private var appStoreCard: some View {
+    /// Apple account authentication is a separate card from choosing a target app.
+    private var accountCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            CardHeading(
-                title: "APP STORE",
-                subtitle: "Apple account & downloads",
-                icon: "bag"
-            )
-
-            if let account = appStoreSession?.account {
-                HStack(spacing: 8) {
+            CardHeading(title: "APPLE ACCOUNT", subtitle: "Login, 2FA and Anisette", icon: "person.crop.circle.badge.checkmark")
+            if let session = appStoreSession, let account = session.account {
+                HStack(spacing: 9) {
                     Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Signed in").font(.subheadline.weight(.semibold))
-                        Text(account.email).font(.caption).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Text(account.country.uppercased())
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(.secondary)
-                }
-            } else {
-                Text("Sign in and browse by App Store ID or bundle ID. Downloads stay separate until you choose to send one to decryption.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            if let ipa = appStoreSession?.downloadedIPA {
-                HStack(spacing: 8) {
-                    Image(systemName: "doc.zipper").foregroundStyle(accent)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Encrypted IPA ready").font(.subheadline.weight(.semibold))
-                        Text(ipa.lastPathComponent).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        Text(account.email).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                        Text(session.automaticAnisetteReady ? "Anisette ready · \(session.automaticAnisetteServer)" : "Signed in · \(account.country.uppercased()) storefront")
+                            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     }
                     Spacer(minLength: 0)
                 }
-                .padding(10)
-                .background(canvas, in: RoundedRectangle(cornerRadius: 12))
+            } else {
+                Text("Sign in with your Apple ID and complete 2FA. Anisette is set up automatically from the SideStore server list.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
-
-            Button {
-                Diagnostics.breadcrumb("App Store utility button tapped")
-                if appStoreSession == nil {
-                    Diagnostics.breadcrumb("appstore session: init started from dedicated card")
-                    appStoreSession = AppStoreSession(outputDirectory: LibraryStore.defaultImportsRoot)
+            HStack(spacing: 10) {
+                Button {
+                    ensureAppStoreSession()
+                    showingSignIn = true
+                } label: {
+                    Label(appStoreSession?.account == nil ? "Sign in to Apple" : "Manage login", systemImage: "person.crop.circle")
+                        .frame(maxWidth: .infinity)
                 }
-                showingAppStore = true
-            } label: {
-                Label(appStoreSession?.account == nil ? "Sign in or browse App Store" : "Manage Apple account & apps",
-                      systemImage: "arrow.up.forward.square")
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                .buttonStyle(.borderedProminent)
+                .tint(accent)
+                Button {
+                    ensureAppStoreSession()
+                    showingAdvanced = true
+                } label: {
+                    Image(systemName: "gearshape").frame(minWidth: 40, minHeight: 36)
+                }
+                .buttonStyle(.bordered)
+                .tint(accent)
+                .accessibilityLabel("Anisette configuration")
             }
-            .buttonStyle(.bordered)
-            .tint(accent)
         }
         .padding(16)
         .cardSurface()
-        .onAppear { Diagnostics.currentScreen = "decrypt.appstore" }
+    }
+
+    /// Search-based target selection is separate from account login.
+    /// Create the session only on an explicit action, never during body evaluation.
+    private var appPickerCard: some View {
+        Group {
+            if let appStoreSession {
+                AppStoreSearchCard(
+                    session: appStoreSession,
+                    searchText: $appSearchText,
+                    showingBrowser: $showingAppStore
+                )
+            } else {
+                VStack(alignment: .leading, spacing: 12) {
+                    CardHeading(title: "APP PICKER", subtitle: "Search the App Store", icon: "magnifyingglass")
+                    Text("Set up the Apple account section above first. Then search apps by name, bundle ID or App Store link.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button {
+                        ensureAppStoreSession()
+                        appSearchText = ""
+                    } label: {
+                        Label("Start App Store search", systemImage: "magnifyingglass")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(accent)
+                }
+                .padding(16)
+                .cardSurface()
+            }
+        }
+    }
+
+    private func ensureAppStoreSession() {
+        if appStoreSession == nil {
+            Diagnostics.breadcrumb("appstore session: initialized from Apple account section")
+            appStoreSession = AppStoreSession(outputDirectory: LibraryStore.defaultImportsRoot)
+        }
     }
 
     private var installedInput: some View {

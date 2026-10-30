@@ -9,14 +9,15 @@ struct AppStoreView: View {
     var onUseInstalled: (String) -> Void
 
     @State private var identifier = ""
-    @State private var showingSignIn = false
-    @State private var showingImport = false
+    @State private var searchText = ""
     @State private var showingLog = false
 
     var body: some View {
         NavigationStack {
             Form {
-                accountSection
+                accountStatusSection
+                searchSection
+                if !session.searchResults.isEmpty { searchResultsSection }
                 lookupSection
                 if let app = session.app { appSection(app) }
                 downloadSection
@@ -40,12 +41,6 @@ struct AppStoreView: View {
                         Label(session.country.uppercased(), systemImage: "globe")
                     }
                 }
-            }
-            .sheet(isPresented: $showingSignIn) {
-                SignInView(session: session)
-            }
-            .sheet(isPresented: $showingImport) {
-                ImportSessionView(session: session)
             }
             .sheet(isPresented: $showingLog) {
                 NavigationStack {
@@ -78,6 +73,68 @@ struct AppStoreView: View {
     }
 
     // MARK: Sections
+
+    private var searchSection: some View {
+        Section {
+            HStack {
+                TextField("Search app name, bundle ID or App Store link", text: $searchText)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .submitLabel(.search)
+                    .onSubmit { Task { await session.searchApps(searchText) } }
+                Button {
+                    Task { await session.searchApps(searchText) }
+                } label: {
+                    Image(systemName: "magnifyingglass")
+                }
+                .disabled(searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || session.busy)
+            }
+            if session.busy {
+                ProgressView(session.status).font(.caption)
+            } else if !session.searchResults.isEmpty {
+                Text("Choose a result to inspect version, acquire its licence and download the IPA.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                Text("Search by name, bundle ID, numeric App Store ID or paste an App Store link.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Search apps")
+        }
+    }
+
+    private var searchResultsSection: some View {
+        Section("Results · \(session.searchResults.count)") {
+            ForEach(session.searchResults) { result in
+                Button {
+                    session.selectApp(result)
+                } label: {
+                    HStack(spacing: 10) {
+                        if let artwork = result.artworkURL {
+                            AsyncImage(url: artwork) { image in
+                                image.resizable().aspectRatio(contentMode: .fill)
+                            } placeholder: {
+                                RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.08))
+                            }
+                            .frame(width: 48, height: 48)
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                        }
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(result.name).font(.subheadline.weight(.semibold)).foregroundStyle(.primary).lineLimit(1)
+                            Text(result.bundleID).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            Text("v\(result.version) · " + (result.isFree ? "Free" : String(format: "%.2f", result.price)))
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 4)
+                        Image(systemName: "chevron.right").font(.caption2.weight(.bold)).foregroundStyle(.tertiary)
+                    }
+                    .padding(.vertical, 3)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
 
     private var lookupSection: some View {
         Section {
@@ -136,36 +193,16 @@ struct AppStoreView: View {
         }
     }
 
-    private var accountSection: some View {
-        Section {
+    private var accountStatusSection: some View {
+        Section("Apple account") {
             if let account = session.account {
-                LabeledValue(label: "Apple ID", value: account.email)
-                if !account.name.isEmpty {
-                    LabeledValue(label: "Name", value: account.name)
-                }
+                LabeledValue(label: "Signed in", value: account.email)
                 LabeledValue(label: "Storefront", value: account.storeFront.isEmpty ? "—" : account.storeFront)
-                Button("Sign in again (refresh token)") {
-                    showingSignIn = true
-                }
-                Button("Sign out", role: .destructive) {
-                    session.signOut()
-                }
             } else {
-                Button {
-                    showingSignIn = true
-                } label: {
-                    Label("Sign in with Apple ID", systemImage: "person.crop.circle.badge.checkmark")
-                }
-                Button {
-                    showingImport = true
-                } label: {
-                    Label("Use an existing session", systemImage: "square.and.arrow.down")
-                }
+                Label("Sign in from the Apple Account section on the main screen.", systemImage: "person.crop.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-        } header: {
-            Text("Account")
-        } footer: {
-            Text("Apple’s modern sign-in and selectable SMS delivery need a working anisette-v3 provider configured under the gear. Without attestation, Apple may reject direct sign-in before checking the password (HTTP 403); use an existing signed session from ipatool/ipadecrypt instead. Session tokens are stored in the iOS Keychain.")
         }
     }
 

@@ -16,6 +16,7 @@ final class AppStoreSession: ObservableObject {
     // Account / app
     @Published private(set) var account: AppStoreAccount?
     @Published private(set) var app: AppStoreApp?
+    @Published private(set) var searchResults: [AppStoreApp] = []
     @Published private(set) var downloadedIPA: URL?
     @Published private(set) var ticket: AppStoreTicket?
 
@@ -480,11 +481,17 @@ final class AppStoreSession: ObservableObject {
     private func provisionAutomaticAnisette(at preferredURL: URL) async throws -> AnisetteHeaders {
         await refreshPublicAnisetteServers()
 
-        let preferred = preferredURL.absoluteString
-        var candidates = AnisetteServerOption.rotated(anisetteServerOptions, startingAt: preferred)
-        if !candidates.contains(where: { $0.url == preferred }) {
-            candidates.insert(AnisetteServerOption(name: "Selected", url: preferred), at: 0)
+        let selectedServer = automaticAnisetteServer
+        let customOption: AnisetteServerOption?
+        if !anisetteServerOptions.contains(where: { $0.url == selectedServer }),
+           let url = URL(string: selectedServer), url.scheme?.lowercased() == "https", url.host != nil {
+            customOption = AnisetteServerOption(name: "Selected", url: selectedServer)
+        } else {
+            customOption = nil
         }
+        let source = anisetteServerOptions + (customOption.map { [$0] } ?? [])
+        var candidates = AnisetteServerOption.rotated(source, startingAt: selectedServer)
+        if candidates.isEmpty { candidates = AnisetteServerOption.rotated(AnisetteServerOption.publicOptions, startingAt: selectedServer) }
 
         var failures: [String] = []
         for (index, option) in candidates.enumerated() {
@@ -591,6 +598,53 @@ final class AppStoreSession: ObservableObject {
     }
 
     // MARK: - Lookup
+
+    func searchApps(_ query: String) async {
+        let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !term.isEmpty else {
+            searchResults = []
+            return
+        }
+        busy = true
+        error = nil
+        status = "Searching the " + country.uppercased() + " App Store…"
+        defer { busy = false }
+        do {
+            if let identifier = AppStoreIdentifier.parse(term) {
+                do {
+                    let exact = try await AppStoreLookup.lookup(identifier, country: country)
+                    searchResults = [exact]
+                    status = "Found exact match: " + exact.name
+                    append(status, .success)
+                    return
+                } catch {
+                    // A reverse-DNS string may be a search phrase, so fall back
+                    // to the public term endpoint if exact lookup found nothing.
+                    if case .bundleID = identifier { }
+                    else { throw error }
+                }
+            }
+            searchResults = try await AppStoreLookup.search(term, country: country)
+            status = searchResults.isEmpty ? "No results" : "Found " + String(searchResults.count) + " apps"
+            append(status, searchResults.isEmpty ? .warn : .success)
+        } catch {
+            fail(error, keepStatus: false)
+        }
+    }
+
+    func selectApp(_ app: AppStoreApp) {
+        self.app = app
+        searchResults = []
+        ticket = nil
+        downloadedIPA = nil
+        error = nil
+        status = app.name + " · " + app.bundleID + " · " + app.version
+        append("Selected " + app.name + " (" + app.bundleID + ").", .success)
+    }
+
+    func clearSearch() {
+        searchResults = []
+    }
 
     func lookUp(_ identifier: String) async {
         busy = true
