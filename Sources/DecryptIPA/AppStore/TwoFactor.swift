@@ -151,6 +151,12 @@ enum TwoFactorParsing {
         return []
     }
 
+    static func jsonDictionary(_ data: Data) -> [String: Any] {
+        guard let object = try? JSONSerialization.jsonObject(with: data),
+              let dictionary = object as? [String: Any] else { return [:] }
+        return dictionary
+    }
+
     static func stringValue(_ raw: Any?) -> String? {
         switch raw {
         case let string as String: return string
@@ -198,7 +204,7 @@ struct AppleIDTwoFactor {
         }
 
         return TwoFactorParsing.challenge(
-            json: Self.jsonDictionary(data),
+            json: TwoFactorParsing.jsonDictionary(data),
             headers: headerDictionary(http),
             email: email,
             mode: .session,
@@ -276,7 +282,7 @@ struct AppleIDTwoFactor {
             throw appFailure("No response from Apple while verifying the \(method) code.")
         }
 
-        let json = Self.jsonDictionary(data)
+        let json = TwoFactorParsing.jsonDictionary(data)
 
         if (200..<300).contains(http.statusCode), !TwoFactorParsing.isTwoFactor(json) {
             return
@@ -328,12 +334,6 @@ struct AppleIDTwoFactor {
             headers["\(key)"] = "\(value)"
         }
         return headers
-    }
-
-    static func jsonDictionary(_ data: Data) -> [String: Any] {
-        guard let object = try? JSONSerialization.jsonObject(with: data),
-              let dictionary = object as? [String: Any] else { return [:] }
-        return dictionary
     }
 
     private func snippet(_ data: Data) -> String {

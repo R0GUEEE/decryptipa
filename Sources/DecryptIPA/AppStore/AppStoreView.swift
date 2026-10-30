@@ -264,7 +264,9 @@ struct SignInView: View {
         NavigationStack {
             Form {
                 if let challenge = session.challenge {
-                    challengeSection(challenge)
+                    challengeHeaderSection(challenge)
+                    challengeDeliverySection(challenge)
+                    challengeCodeSection(challenge, code: $code)
                 } else {
                     credentialSection
                 }
@@ -327,64 +329,66 @@ struct SignInView: View {
 
     // MARK: Two-factor
 
-    private func challengeSection(_ challenge: TwoFactorChallenge) -> some View {
-        Group {
-            Section {
-                Text(challenge.note)
+    private func challengeHeaderSection(_ challenge: TwoFactorChallenge) -> some View {
+        Section {
+            Text(challenge.note)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if !challenge.supportsNumberChoice {
+                Text("Apple delivers this code to the trusted devices and phone number on the account.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                if !challenge.supportsNumberChoice {
-                    Text("Apple delivers this code to the trusted devices and phone number on the account.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            } header: {
-                Text("Verification required")
             }
+        } header: {
+            Text("Verification required")
+        }
+    }
 
-            Section {
-                ForEach(challenge.options) { option in
-                    Button {
-                        session.selectedOptionID = option.id
-                        Task { await session.sendCode(option: option) }
-                    } label: {
-                        HStack {
-                            Image(systemName: option.kind == .sms ? "message.fill" : "iphone")
-                                .frame(width: 22)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(option.title).foregroundStyle(.primary)
-                                Text(option.detail).font(.caption).foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            if session.selectedOptionID == option.id {
-                                Image(systemName: "checkmark.circle.fill").foregroundStyle(.tint)
-                            }
+    private func challengeDeliverySection(_ challenge: TwoFactorChallenge) -> some View {
+        Section {
+            ForEach(challenge.options) { option in
+                Button {
+                    session.selectedOptionID = option.id
+                    Task { await session.sendCode(option: option) }
+                } label: {
+                    HStack {
+                        Image(systemName: option.kind == .sms ? "message.fill" : "iphone")
+                            .frame(width: 22)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(option.title).foregroundStyle(.primary)
+                            Text(option.detail).font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        if session.selectedOptionID == option.id {
+                            Image(systemName: "checkmark.circle.fill").foregroundStyle(.tint)
                         }
                     }
                 }
-            } header: {
-                Text("Receive the code")
-            } footer: {
-                Text(session.canResend || session.codeRequestedAt == nil
-                     ? "Tap a number to have Apple send a text message."
-                     : "You can request another code in a few seconds.")
             }
+        } header: {
+            Text("Receive the code")
+        } footer: {
+            Text("Tap a number to have Apple send a text message.")
+        }
+    }
 
-            Section("Code") {
-                TextField(String(repeating: "•", count: challenge.codeLength), text: $code)
-                    .keyboardType(.numberPad)
-                    .textContentType(.oneTimeCode)
-                    .font(.system(.title3, design: .monospaced))
-                if let requested = session.codeRequestedAt {
-                    Text("Requested \(requested.formatted(date: .omitted, time: .shortened))")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Button("Resend code") {
-                    Task { await session.sendCode(option: session.selectedOption) }
-                }
-                .disabled(!session.canResend || session.busy)
+    private func challengeCodeSection(_ challenge: TwoFactorChallenge, code: Binding<String>) -> some View {
+        Section {
+            TextField(String(repeating: "\u{2022}", count: challenge.codeLength), text: code)
+                .keyboardType(.numberPad)
+                .textContentType(.oneTimeCode)
+                .font(.system(.title3, design: .monospaced))
+            if let requested = session.codeRequestedAt {
+                Text("Requested \(requested.formatted(date: .omitted, time: .shortened))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
+            Button("Resend code") {
+                Task { await session.sendCode(option: session.selectedOption) }
+            }
+            .disabled(!session.canResend || session.busy)
+        } header: {
+            Text("Code")
         }
     }
 
