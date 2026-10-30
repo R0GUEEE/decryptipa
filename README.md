@@ -64,14 +64,47 @@ the track id for a bundle id (and the reverse), the current version, price,
 `minimumOsVersion`, artwork and size, and the storefront is selectable (25
 countries).
 
-**Sign-in** is a port of `internal/appstore.Login`: the bag is fetched from
-`init.itunes.apple.com/bag.xml`, the authenticate request is an XML plist POSTed
-to `buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/authenticate/`, and Apple's
-per-pod redirect is re-posted rather than followed. A `-5000` failure retries
-once; `MZFinance.BadLogin.Configurator_message` means two-factor, so the 6-digit
-code is appended to the password and submitted again — the same trick the
-desktop tool uses. The resulting `dsPersonId`, `passwordToken`,
-`X-Set-Apple-Store-Front` and `pod` are kept (token in the keychain) and reused.
+**Sign-in** has two paths, chosen automatically:
+
+* **Native + session 2FA** (`auth/v1/native/fast`) when an anisette provider is
+  configured — see below.
+* **Classic MZFinance** otherwise: the bag is fetched from
+  `init.itunes.apple.com/bag.xml`, the authenticate request is an XML plist
+  POSTed to `buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/authenticate/`,
+  and Apple's per-pod redirect is re-posted rather than followed. A `-5000`
+  failure retries once.
+
+Either way the result is the same account material (`dsPersonId`,
+`passwordToken`, `X-Set-Apple-Store-Front`, `pod`), stored in the keychain.
+
+## Apple ID 2FA with delivery options
+
+A refused sign-in now opens a real **two-factor step** instead of an error:
+
+| Mode | What Apple gives us | What the user does |
+| --- | --- | --- |
+| Session (`auth/v1/native/fast` → 401 + `X-Apple-ID-Session-Id`/`scnt`) | `trustedPhoneNumbers[]` (id, masked number, push mode) and trusted devices | Picks a number → **Text me a code** → types it |
+| Legacy (`MZFinance` 2FA gate) | nothing beyond "code required" | Apple already texted the trusted phone; types the code |
+
+Session mode talks to `idmsa.apple.com/appleauth/auth`:
+
+* `GET /auth` — loads the trusted numbers and the code length
+* `PUT /auth/verify/phone {"phoneNumber":{"id":N},"mode":"sms"}` — sends the text
+* `POST /auth/verify/phone/securitycode` — verifies an SMS code
+* `PUT /auth/verify/trusteddevice` + `POST /auth/verify/trusteddevice/securitycode`
+  — push prompt + its code
+
+After a successful verification the request is replayed against
+`auth/v1/native/fast`, which now yields the password token.
+
+**Anisette.** Apple's modern endpoints require device attestation
+(`X-Apple-I-MD*`). The app ships no attestation of its own; instead *Advanced*
+in the sign-in sheet accepts any anisette-v3 compatible server
+(`GET <url>` → `{"X-Apple-I-MD": …, "X-Apple-I-MD-M": …}`, optional basic auth).
+With a provider the app uses native auth and can therefore offer the per-number
+SMS choice. Without one it uses the classic flow, where the code still arrives
+by text but the number is chosen by Apple. A widget-key override is available for
+endpoints that ask for it.
 
 **Licence** — free apps are acquired with `buyProduct` (`X-Token`, `X-Dsid`,
 `X-Apple-Store-Front`) before download; `failureType 5002` and HTTP 500 are
@@ -144,7 +177,9 @@ Two gates run in CI:
   version ordering (`1.2 < 1.10`), `@evt` parsing with quoted messages, App
   Store identifier forms (bundle id / track id / store link / free text
   rejection), XML plist escaping and integer rendering, `<Document>`-wrapped and
-  bare-key/value response normalisation, and the auth-endpoint allowlist. It caught two real defects before the first release: a
+  bare-key/value response normalisation, the auth-endpoint allowlist, 2FA
+  challenge parsing (trusted numbers, push modes, string ids, code length,
+  session headers, trusted-device fallback) and anisette header handling. It caught two real defects before the first release: a
   64-bit header-offset assumption in the fixture and `Version("abc")`
   silently parsing as `0`.
 * `ipa` builds the unsigned app, then fails the build unless
@@ -177,7 +212,10 @@ Sources/DecryptIPA/
     AppStoreClient.swift   bag, sign-in + 2FA, buyProduct, download tickets,
                            CDN streaming, XML plist encode/normalise
     AppStoreSession.swift  account persistence (keychain), GUID, storefront
-    AppStoreView.swift     identifier → account → download → hand off
+    AppStoreView.swift     identifier → account → 2FA → download → hand off
+    AppStoreNative.swift   native auth, session 2FA completion, code requests
+    TwoFactor.swift        challenge model, trusted-number parsing, idmsa client
+    Anisette.swift         anisette provider (remote) + local identity headers
 Resources/ipadecrypt-helper-arm64
 ```
 
