@@ -244,6 +244,13 @@ check(remoteHeaders?.values["X-Apple-I-Client-Time"] == "2026-10-30T12:00:00Z", 
 check(remoteHeaders?.values["X-Mme-Client-Info"] == "Anisette test client", "RemoteAnisette extra headers preserved")
 check((try? AnisetteHeaders.validated(["X-Apple-I-MD": "only-otp"])) == nil, "incomplete automatic anisette rejected")
 
+print("Public Anisette server options")
+check(!AnisetteServerOption.publicOptions.isEmpty, "public provider list is populated")
+check(AnisetteServerOption.publicOptions.allSatisfy { URL(string: $0.url)?.scheme == "https" }, "all public providers use HTTPS")
+check(AnisetteServerOption.publicOptions.first?.url == "https://ani.sidestore.io", "SideStore is the default public provider")
+check(AnisetteServerOption.isPublic("https://ani.sidestore.io"), "official SideStore endpoint recognized")
+check(!AnisetteServerOption.isPublic("http://example.com"), "unknown insecure endpoint not a public option")
+
 print("App Store credential persistence")
 check(AppStoreCredentialPolicy.rememberedPassword("correct-horse", remember: true) == "correct-horse", "remembered password preserved")
 check(AppStoreCredentialPolicy.rememberedPassword("correct-horse", remember: false) == nil, "unremembered password discarded")

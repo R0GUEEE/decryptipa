@@ -493,16 +493,29 @@ struct AnisetteSettingsView: View {
             Form {
                 Section {
                     LabeledValue(label: "Setup", value: session.automaticAnisetteReady ? "Ready" : "Not configured")
-                    TextField("https://ani.sidestore.io", text: $session.automaticAnisetteServer)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .keyboardType(.URL)
+                    Picker("Public server", selection: $session.automaticAnisetteServer) {
+                        ForEach(AnisetteServerOption.publicOptions) { option in
+                            Text(option.name).tag(option.url)
+                        }
+                        if !AnisetteServerOption.isPublic(session.automaticAnisetteServer) {
+                            Text("Custom server").tag(session.automaticAnisetteServer)
+                        }
+                    }
+                    if !AnisetteServerOption.isPublic(session.automaticAnisetteServer) {
+                        TextField("Custom HTTPS server URL", text: $session.automaticAnisetteServer)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .keyboardType(.URL)
+                    }
+                    Text("The selected provider is provisioned automatically before the first Apple sign-in. You can change providers here; changing server clears its saved server-bound identity and reprovisions on next sign-in.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     Button {
                         showingProvisionConsent = true
                     } label: {
                         HStack {
                             if session.busy { ProgressView().controlSize(.small) }
-                            Label(session.automaticAnisetteReady ? "Refresh automatic setup" : "Set up automatically", systemImage: "wand.and.stars")
+                            Label(session.automaticAnisetteReady ? "Refresh automatic setup" : "Set up automatically now", systemImage: "wand.and.stars")
                         }
                     }
                     .disabled(session.busy)

@@ -41,7 +41,16 @@ final class AppStoreSession: ObservableObject {
         didSet { Keychain.save(Data(anisettePassword.utf8), account: Self.anisettePasswordKey) }
     }
     @Published var automaticAnisetteServer: String {
-        didSet { defaults.set(automaticAnisetteServer, forKey: Self.automaticAnisetteServerKey) }
+        didSet {
+            defaults.set(automaticAnisetteServer, forKey: Self.automaticAnisetteServerKey)
+            let selectedHost = URL(string: automaticAnisetteServer)?.host
+            if automaticAnisetteUser != nil, selectedHost != automaticAnisetteUser?.url.host {
+                automaticAnisetteUser = nil
+                automaticAnisetteReady = false
+                Keychain.delete(account: Self.automaticAnisetteUserKey)
+                Diagnostics.breadcrumb("anisette server changed; clearing server-bound provision")
+            }
+        }
     }
     @Published private(set) var automaticAnisetteReady = false
 
@@ -165,6 +174,21 @@ final class AppStoreSession: ObservableObject {
         pendingPassword = password
         pendingRemember = rememberPassword
         Diagnostics.breadcrumb("apple sign-in started · anisette=\(usesAnisette) · storefront=\(country)")
+
+        if anisetteURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           !automaticAnisetteReady {
+            do {
+                let address = automaticAnisetteServer.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard let url = URL(string: address), url.scheme?.lowercased() == "https", url.host != nil else {
+                    throw appFailure("Select a valid HTTPS Anisette-v3 server in Advanced sign-in settings.")
+                }
+                status = "Automatically setting up Anisette…"
+                try await provisionAutomaticAnisette(at: url)
+            } catch {
+                fail(error)
+                return
+            }
+        }
 
         let anisette = await anisetteHeaders()
         append(anisette == nil ? "Using the legacy App Store sign-in path (no anisette provider configured)."
@@ -390,9 +414,8 @@ final class AppStoreSession: ObservableObject {
 
     // MARK: - Anisette
 
-    /// Provisions a RemoteAnisette user against the selected Anisette-v3 server,
-    /// validates one header response, then stores device identity and the ADI
-    /// personalization blob in Keychain for later sign-ins.
+    /// Explicitly tests/configures the selected server from Advanced settings.
+    /// First sign-in also invokes this automatically if no session is saved.
     func configureAutomaticAnisette() async {
         let address = automaticAnisetteServer.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let url = URL(string: address), url.scheme?.lowercased() == "https", url.host != nil else {
@@ -403,22 +426,10 @@ final class AppStoreSession: ObservableObject {
         busy = true
         error = nil
         status = "Provisioning Anisette with " + (url.host ?? address) + "…"
-        Diagnostics.breadcrumb("anisette provisioning started · host=" + (url.host ?? "?"))
         defer { busy = false }
 
         do {
-            let user = try await AnisetteUser.provision(url: url)
-            let headers = try AnisetteHeaders.validated(await user.fetchHeaders())
-            guard let data = try? JSONEncoder().encode(user) else {
-                throw appFailure("Could not store the Anisette device state.")
-            }
-
-            Keychain.save(data, account: Self.automaticAnisetteUserKey)
-            automaticAnisetteUser = user
-            automaticAnisetteReady = true
-            status = "Anisette is ready for Apple sign-in"
-            append("Anisette provisioned from " + (url.host ?? address) + "; headers validated (OTP " + String(headers.values["X-Apple-I-MD"]?.count ?? 0) + " chars).", .success)
-            Diagnostics.breadcrumb("anisette provisioning completed · host=" + (url.host ?? "?"))
+            try await provisionAutomaticAnisette(at: url)
         } catch {
             let message = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
             self.error = "Anisette setup failed: " + message
@@ -426,6 +437,25 @@ final class AppStoreSession: ObservableObject {
             append(self.error ?? "Anisette setup failed", .error)
             Diagnostics.breadcrumb("anisette provisioning failed · " + message)
         }
+    }
+
+    private func provisionAutomaticAnisette(at url: URL) async throws {
+        let host = url.host ?? url.absoluteString
+        status = "Provisioning Anisette with " + host + "…"
+        Diagnostics.breadcrumb("anisette provisioning started · host=" + host)
+
+        let user = try await AnisetteUser.provision(url: url)
+        let headers = try AnisetteHeaders.validated(await user.fetchHeaders())
+        guard let data = try? JSONEncoder().encode(user) else {
+            throw appFailure("Could not store the Anisette device state.")
+        }
+
+        Keychain.save(data, account: Self.automaticAnisetteUserKey)
+        automaticAnisetteUser = user
+        automaticAnisetteReady = true
+        status = "Anisette is ready for Apple sign-in"
+        append("Anisette provisioned from " + host + "; headers validated (OTP " + String(headers.values["X-Apple-I-MD"]?.count ?? 0) + " chars).", .success)
+        Diagnostics.breadcrumb("anisette provisioning completed · host=" + host)
     }
 
     func removeAutomaticAnisette() {

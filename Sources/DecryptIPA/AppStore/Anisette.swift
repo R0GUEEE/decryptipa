@@ -134,3 +134,38 @@ struct AnisetteProvider {
         }
     }
 }
+
+/// HTTPS Anisette-v3 endpoints published by the SideStore anisette-servers
+/// project. Keep the list explicit, reviewed and HTTPS-only; do not fetch a
+/// provider list at runtime and trust arbitrary server-supplied URLs.
+struct AnisetteServerOption: Identifiable, Hashable {
+    let name: String
+    let url: String
+    var id: String { url }
+
+    static let publicOptions: [AnisetteServerOption] = [
+        .init(name: "SideStore", url: "https://ani.sidestore.io"),
+        .init(name: "SideStore · app", url: "https://ani.sidestore.app"),
+        .init(name: "SideStore · zip", url: "https://ani.sidestore.zip"),
+        .init(name: "SideStore · xyz", url: "https://ani.846969.xyz"),
+        .init(name: "SideStore · new", url: "https://new.ani.sidestore.io"),
+        .init(name: "jkcoxson · macOS", url: "https://mac-ani.jkcoxson.com"),
+        .init(name: "nythepegasus", url: "https://ani.npeg.us"),
+        .init(name: "WE. Studio", url: "https://anisette.wedotstud.io"),
+        .init(name: "SteX", url: "https://ani.xu30.top"),
+        .init(name: "owoellen", url: "https://ani.owoellen.rocks"),
+        .init(name: "iDeviceHacked", url: "https://ani.idevicehacked.com"),
+        .init(name: "neoarz", url: "https://ani.neoarz.com"),
+        .init(name: "pythonplayer123", url: "https://ani3server.fly.dev"),
+        .init(name: "Jayden", url: "https://ani.jaydenha.uk"),
+        .init(name: "crystall1ne", url: "https://anisette.crystall1ne.dev"),
+        .init(name: "ethxn", url: "https://omni.ethxn.xyz"),
+        .init(name: "koremi", url: "https://ani.sjwon0368.dpdns.org"),
+        .init(name: "uwucloud", url: "https://ani.uwucloud.fun"),
+        .init(name: "Lill q", url: "https://anisette.lillq.me")
+    ]
+
+    static func isPublic(_ url: String) -> Bool {
+        publicOptions.contains(where: { $0.url == url })
+    }
+}
