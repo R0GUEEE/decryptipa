@@ -336,7 +336,7 @@ struct DecryptView: View {
             } else {
                 VStack(alignment: .leading, spacing: 12) {
                     CardHeading(title: "APP PICKER", subtitle: "Search the App Store", icon: "magnifyingglass")
-                    Text("Set up the Apple account section above first. Then search apps by name, bundle ID or App Store link.")
+                    Text("Open the picker to search the public App Store. Apple login is only needed to acquire and download an IPA.")
                         .font(.caption).foregroundStyle(.secondary)
                     Button {
                         ensureAppStoreSession()
