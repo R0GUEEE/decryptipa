@@ -37,8 +37,22 @@ extension AppStoreClient {
             }
         }
 
-        let account = try await signIn(email: email, password: password, authCode: "", country: country)
-        return .signedIn(account)
+        do {
+            let account = try await signIn(email: email, password: password, authCode: "", country: country)
+            return .signedIn(account)
+        } catch AppStoreError.authCodeRequired {
+            // The refused attempt is what makes Apple send the code, so the
+            // challenge is ready to accept it immediately.
+            return .challenge(TwoFactorChallenge(
+                mode: .legacy,
+                email: email,
+                sessionID: nil,
+                scnt: nil,
+                options: [.device],
+                codeLength: 6,
+                note: "Apple requires two-factor authentication. A \(6)-digit code was sent to the trusted phone number and devices on this account — enter it below."
+            ))
+        }
     }
 
     func nativeSignIn(
