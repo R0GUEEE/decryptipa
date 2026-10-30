@@ -118,6 +118,31 @@ streamed straight into `Documents/Imports` with progress. The IPA stays
 FairPlay-encrypted, is installed on the device with `appinst`, and is decrypted
 there by the same helper as a local file.
 
+### HTTP 403 with an empty body
+
+Apple answers `403` and no body to an **unsigned** `authenticate` request — it
+rejects the call before it reads the password. This is the current state of the
+App Store API: both desktop implementations (ipatool and ipadecrypt) sign the
+request with an SAP action signature produced by running Apple's own macOS
+framework under emulation, which a sandboxed iOS app cannot do.
+
+`1.2.1` handles it as a first-class outcome rather than a dead end:
+
+* **Strategy ladder** — native auth (when anisette is configured) → classic
+  MZFinance → native auth with local-only headers. Every attempt is logged with
+  its URL, status, byte count, `Server`, `Content-Type`, `Location` and
+  correlation key.
+* **Readable error** — the message says the request itself was refused, not the
+  password, and offers "Set up an anisette provider" inline.
+* **Copy diagnostics** — one tap exports the request log and app log.
+* **Use an existing session** — paste `dsPersonId`, `passwordToken`, storefront
+  and pod from a machine that *can* sign (ipatool/ipadecrypt). Apple accepts a
+  valid token for licences and downloads, so the rest of the App Store tab works
+  from that point on.
+* **Decrypt the installed copy** — no Apple account involved at all.
+
+429 responses are surfaced as rate limiting rather than as a credential failure.
+
 ### What still needs the desktop
 
 Apple's attested `ent/download` endpoint requires a FairPlay `kbsync` blob that
