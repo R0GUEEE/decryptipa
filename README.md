@@ -40,14 +40,15 @@ DecryptIPA (this app) ──ssh/sftp──▶ jailbroken iPhone
   `LC_ENCRYPTION_INFO(_64)` and reports `cryptid != 0` leftovers.
 * **Library** — outputs land in `Documents/Decrypted`, exposed through the
   Files app (`UIFileSharingEnabled`) and shareable from the Library tab.
-* **Rebuilt workflow UI** — separate cards for jailbreak connection, Apple
-  account login/2FA/Anisette, a searchable App Store app picker, manual IPA or
-  installed-app selection, job progress, and a final Advanced settings card.
-  Search uses Apple's public iTunes catalog and works without login; acquiring
-  an IPA requires the separate Apple account section. Choosing a search result
-  opens its metadata/licence/download flow; only the explicit “Use this IPA and
-  decrypt” action hands the downloaded file to the decrypt job. The root view is
-  a lightweight card-based `ScrollView`, not a nested `Form` tree.
+* **Four-stage workflow UI** — one `ScrollView` with numbered sections:
+  **1 Connection** (inline device list, add/edit sheet, probe test),
+  **2 Apple account** (Apple ID sign-in, 2FA by code, SMS or trusted device,
+  Anisette provider dropdown with consent-based provisioning, session import),
+  **3 Choose the app** (App Store search with a result list and app detail,
+  local IPA, installed bundle id, then the decrypt run and result), and
+  **4 Advanced settings** (collapsed install/verify toggles, job log,
+  diagnostics, decrypted library). The previous `DecryptView`, `AppStoreView`
+  and `AppStoreSearchCard` were removed, so there is a single UI path.
 
 Two decrypt input modes:
 
