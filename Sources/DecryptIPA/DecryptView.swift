@@ -7,12 +7,11 @@ import UniformTypeIdentifiers
 /// makes it easy to bisect and cheap to lay out.
 struct DecryptView: View {
     enum InputMode: String, CaseIterable, Identifiable {
-        case ipa, appStore, installed
+        case ipa, installed
         var id: String { rawValue }
         var label: String {
             switch self {
             case .ipa: "IPA file"
-            case .appStore: "App Store"
             case .installed: "Installed"
             }
         }
@@ -47,6 +46,7 @@ struct DecryptView: View {
                     headerCard
                     deviceCard
                     inputCard
+                    appStoreCard
                     if engine.isRunning || !engine.log.isEmpty { progressCard }
                     if let url = engine.outputURL { resultCard(url) }
                     optionsCard
@@ -104,7 +104,7 @@ struct DecryptView: View {
                         onUseIPA: { url, _ in
                             inputURL = url
                             inputMetadata = try? IPATool.metadata(for: url)
-                            mode = .appStore
+                            mode = .ipa
                         },
                         onUseInstalled: { id in
                             bundleIDText = id
@@ -225,7 +225,6 @@ struct DecryptView: View {
 
             switch mode {
             case .ipa: ipaInput
-            case .appStore: appStoreInput
             case .installed: installedInput
             }
         }
@@ -265,36 +264,65 @@ struct DecryptView: View {
         }
     }
 
-    private var appStoreInput: some View {
-        VStack(alignment: .leading, spacing: 10) {
+    /// Apple account login/download lives in its own card and sheet, not as an
+    /// input mode. The IPA only enters the decrypt flow after the user taps the
+    /// explicit "Use downloaded IPA" action in AppStoreView.
+    private var appStoreCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            CardHeading(
+                title: "APP STORE",
+                subtitle: "Apple account & downloads",
+                icon: "bag"
+            )
+
+            if let account = appStoreSession?.account {
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Signed in").font(.subheadline.weight(.semibold))
+                        Text(account.email).font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Text(account.country.uppercased())
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                Text("Sign in and browse by App Store ID or bundle ID. Downloads stay separate until you choose to send one to decryption.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let ipa = appStoreSession?.downloadedIPA {
+                HStack(spacing: 8) {
+                    Image(systemName: "doc.zipper").foregroundStyle(accent)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Encrypted IPA ready").font(.subheadline.weight(.semibold))
+                        Text(ipa.lastPathComponent).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(10)
+                .background(canvas, in: RoundedRectangle(cornerRadius: 12))
+            }
+
             Button {
                 if appStoreSession == nil {
-                    Diagnostics.breadcrumb("appstore session: init started from source card")
+                    Diagnostics.breadcrumb("appstore session: init started from dedicated card")
                     appStoreSession = AppStoreSession(outputDirectory: LibraryStore.defaultImportsRoot)
                 }
                 showingAppStore = true
             } label: {
-                Label("Find by App Store ID or bundle ID", systemImage: "bag")
+                Label(appStoreSession?.account == nil ? "Sign in or browse App Store" : "Manage Apple account & apps",
+                      systemImage: "arrow.up.forward.square")
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .buttonStyle(.bordered)
             .tint(accent)
-
-            if let app = appStoreSession?.app {
-                InfoLine(label: "App", value: app.name)
-                InfoLine(label: "Bundle ID", value: app.bundleID)
-                InfoLine(label: "Version", value: app.version)
-            }
-            if let ipa = appStoreSession?.downloadedIPA {
-                Label("Downloaded · \(ipa.lastPathComponent)", systemImage: "checkmark.circle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.green)
-            } else {
-                Text("Sign in, resolve an identifier, then download the encrypted IPA.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
         }
+        .padding(16)
+        .cardSurface()
+        .onAppear { Diagnostics.currentScreen = "decrypt.appstore" }
     }
 
     private var installedInput: some View {
@@ -448,7 +476,6 @@ struct DecryptView: View {
         if store.selected == nil { return "Add a jailbroken device to get started." }
         switch mode {
         case .ipa: return inputURL == nil ? "Choose an encrypted IPA." : "Ready to decrypt on \(store.selected?.name ?? "device")."
-        case .appStore: return appStoreSession?.downloadedIPA == nil ? "Find an app and download its encrypted IPA first." : "Ready to decrypt the downloaded IPA."
         case .installed: return bundleIDText.isEmpty ? "Enter the bundle ID of an installed app." : "Ready to decrypt the installed app."
         }
     }
@@ -457,7 +484,6 @@ struct DecryptView: View {
         guard store.selected != nil else { return false }
         switch mode {
         case .ipa: return inputURL != nil
-        case .appStore: return appStoreSession?.downloadedIPA != nil
         case .installed: return !bundleIDText.trimmingCharacters(in: .whitespaces).isEmpty
         }
     }
@@ -472,14 +498,13 @@ struct DecryptView: View {
         }
 
         let secrets = store.secrets(for: device)
-        let storeIPA = mode == .appStore ? appStoreSession?.downloadedIPA : nil
-        Diagnostics.breadcrumb("job: start mode=\(mode.rawValue) device=\(device.endpoint) bundle=\(inputMetadata?.bundleID ?? bundleIDText) ipa=\(inputURL?.lastPathComponent ?? storeIPA?.lastPathComponent ?? "-")")
+        Diagnostics.breadcrumb("job: start mode=\(mode.rawValue) device=\(device.endpoint) bundle=\(inputMetadata?.bundleID ?? bundleIDText) ipa=\(inputURL?.lastPathComponent ?? "-")")
 
         let request = DecryptEngine.Request(
             device: device,
             secrets: secrets,
             options: options,
-            inputIPA: mode == .ipa ? inputURL : storeIPA,
+            inputIPA: mode == .ipa ? inputURL : nil,
             bundleIDOverride: mode == .installed ? bundleIDText.trimmingCharacters(in: .whitespaces) : nil,
             outputDirectory: library.root
         )

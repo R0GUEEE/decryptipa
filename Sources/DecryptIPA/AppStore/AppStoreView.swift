@@ -16,9 +16,9 @@ struct AppStoreView: View {
     var body: some View {
         NavigationStack {
             Form {
+                accountSection
                 lookupSection
                 if let app = session.app { appSection(app) }
-                accountSection
                 downloadSection
                 if let error = session.error { errorSection(error) }
                 logSection
@@ -160,7 +160,7 @@ struct AppStoreView: View {
         } header: {
             Text("Account")
         } footer: {
-            Text("The password is only used to obtain an App Store token and is stored in the keychain when you ask for it. With an anisette provider configured, two-factor sign-in lets you pick a trusted number to receive the text; otherwise Apple texts your trusted phone and you type the code.")
+            Text("Apple’s modern sign-in and selectable SMS delivery need a working anisette-v3 provider configured under the gear. Without attestation, Apple may reject direct sign-in before checking the password (HTTP 403); use an existing signed session from ipatool/ipadecrypt instead. Session tokens are stored in the iOS Keychain.")
         }
     }
 
