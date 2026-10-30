@@ -210,6 +210,7 @@ struct AppStoreView: View {
             Text(message)
                 .font(.callout)
                 .foregroundStyle(.red)
+                .fixedSize(horizontal: false, vertical: true)
 
             if !session.log.isEmpty {
                 LogConsole(entries: Array(session.log.suffix(6)), maxHeight: 120)
@@ -220,17 +221,6 @@ struct AppStoreView: View {
             ShareLink(item: session.diagnosticsText) {
                 Label("Copy diagnostics", systemImage: "doc.on.doc")
             }
-
-            if session.app != nil {
-                Button {
-                    Task { await session.download() }
-                } label: {
-                    Label("Try the download again", systemImage: "arrow.clockwise")
-                }
-            }
-        } header: {
-            Text("Problem")
-        }
 
             if let app = session.app {
                 Button {
@@ -246,6 +236,11 @@ struct AppStoreView: View {
                 } label: {
                     Label("Open in the App Store", systemImage: "arrow.up.forward.app")
                 }
+                Button {
+                    Task { await session.download() }
+                } label: {
+                    Label("Try the download again", systemImage: "arrow.clockwise")
+                }
             }
 
             Button {
@@ -253,6 +248,8 @@ struct AppStoreView: View {
             } label: {
                 Label("Show full log", systemImage: "text.alignleft")
             }
+        } header: {
+            Text("Problem")
         }
     }
 
