@@ -31,7 +31,7 @@ extension AppStoreClient {
         // 1. Native auth, when a provider can attest the device.
         if let anisette {
             do {
-                return try await nativeSignIn(
+                return try await nativeSignInWithFallback(
                     email: email,
                     password: password,
                     country: country,
@@ -39,6 +39,7 @@ extension AppStoreClient {
                     widgetKey: widgetKey
                 )
             } catch let error as AppStoreError {
+                if case .rateLimited = error { throw error }
                 lastStatus = error.statusCode ?? lastStatus
                 lastNativeFailure = Self.summary(of: error)
                 notes.append("Native auth · " + Self.summary(of: error))
@@ -109,6 +110,42 @@ extension AppStoreClient {
         }
     }
 
+    /// Apple serves the same native-auth path from two hosts. The primary one
+    /// answers 400 to shapes we can build; the second host is worth exactly one
+    /// attempt, and never after a 429 (that would deepen the rate limit).
+    func nativeSignInWithFallback(
+        email: String,
+        password: String,
+        country: String,
+        anisette: AnisetteHeaders,
+        widgetKey: String
+    ) async throws -> SignInOutcome {
+        do {
+            return try await nativeSignIn(
+                email: email,
+                password: password,
+                country: country,
+                anisette: anisette,
+                widgetKey: widgetKey
+            )
+        } catch let error as AppStoreError {
+            switch error {
+            case .rateLimited, .signIn:
+                throw error
+            default:
+                Diagnostics.breadcrumb("native auth primary host refused; trying buy.itunes.apple.com")
+                return try await nativeSignIn(
+                    email: email,
+                    password: password,
+                    country: country,
+                    anisette: anisette,
+                    widgetKey: widgetKey,
+                    endpoint: "https://buy.itunes.apple.com/auth/v1/native/fast"
+                )
+            }
+        }
+    }
+
     static func legacyChallenge(email: String) -> TwoFactorChallenge {
         TwoFactorChallenge(
             mode: .legacy,
@@ -126,9 +163,10 @@ extension AppStoreClient {
         password: String,
         country: String,
         anisette: AnisetteHeaders,
-        widgetKey: String
+        widgetKey: String,
+        endpoint: String = AppStoreClient.nativeAuthURL
     ) async throws -> SignInOutcome {
-        guard let authURL = URL(string: Self.nativeAuthURL) else {
+        guard let authURL = URL(string: endpoint) else {
             throw AppStoreError.signIn("Bad native auth URL.")
         }
         var request = URLRequest(url: authURL)

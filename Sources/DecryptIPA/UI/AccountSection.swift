@@ -135,13 +135,22 @@ struct AccountSection: View {
             .tint(Palette.accent)
 
             PrimaryButton(
-                title: session.usesAnisette ? "Sign in with 2FA support" : "Sign in",
-                icon: "person.badge.key",
+                title: session.cooldownActive ? "Rate limited by Apple" : (session.usesAnisette ? "Sign in with 2FA support" : "Sign in"),
+                icon: session.cooldownActive ? "hourglass" : "person.badge.key",
                 busy: session.busy,
-                enabled: !email.isEmpty && !password.isEmpty
+                enabled: !email.isEmpty && !password.isEmpty && !session.cooldownActive
             ) {
                 Diagnostics.breadcrumb("Apple ID sign-in form submitted")
                 Task { await session.beginSignIn(email: email, password: password, rememberPassword: remember) }
+            }
+
+            if session.cooldownActive {
+                HStack(spacing: 6) {
+                    Image(systemName: "hourglass").font(.system(size: 10))
+                    Text("Apple answered 429. Attempts resume after " + session.cooldownText + ".")
+                        .font(.caption2)
+                }
+                .foregroundStyle(Palette.warning)
             }
 
             HStack {

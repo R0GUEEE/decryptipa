@@ -25,6 +25,8 @@ final class AppStoreSession: ObservableObject {
     @Published private(set) var selectedOptionID: String?
     @Published private(set) var codeRequestedAt: Date?
     @Published private(set) var waitingForCode = false
+    /// Set when Apple answers 429. Sign-in stays disabled until it passes.
+    @Published private(set) var retryAfter: Date?
 
     // Job state
     @Published private(set) var busy = false
@@ -172,7 +174,22 @@ final class AppStoreSession: ObservableObject {
 
     // MARK: - Sign-in
 
+    var cooldownActive: Bool {
+        guard let retryAfter else { return false }
+        return retryAfter > Date()
+    }
+
+    var cooldownText: String {
+        guard let retryAfter, retryAfter > Date() else { return "" }
+        return retryAfter.formatted(date: .omitted, time: .shortened)
+    }
+
     func beginSignIn(email: String, password: String, rememberPassword: Bool) async {
+        if cooldownActive {
+            error = "Apple rate limited sign-in. Try again after " + cooldownText + "."
+            return
+        }
+
         busy = true
         error = nil
         challenge = nil
@@ -234,6 +251,12 @@ final class AppStoreSession: ObservableObject {
                     waitingForCode = true
                 }
             }
+        } catch let error as AppStoreError {
+            if case .rateLimited = error {
+                retryAfter = Date().addingTimeInterval(90)
+                append("Apple rate limited sign-in; pausing attempts until " + cooldownText + ".", .warn)
+            }
+            fail(error)
         } catch {
             fail(error)
         }
