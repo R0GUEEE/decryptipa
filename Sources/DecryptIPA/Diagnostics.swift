@@ -10,6 +10,8 @@ private let diagnosticsLock = NSLock()
 private var diagnosticsBreadcrumbs: [String] = []
 private let diagnosticsMaxBreadcrumbs = 240
 private var diagnosticsSignalFD: Int32 = -1
+private var diagnosticsMemorySamples: [String] = []
+private let diagnosticsMaxMemorySamples = 180
 
 private let diagnosticsSigAbrt: StaticString = "fatal signal SIGABRT — see last-run.txt\n"
 private let diagnosticsSigSegv: StaticString = "fatal signal SIGSEGV — see last-run.txt\n"
@@ -226,21 +228,34 @@ enum Diagnostics {
     /// Set by the visible screen so memory samples say where the app was.
     static var currentScreen: String = "launch"
 
-    /// One sample per second, written every five. If the footprint runs away the
-    /// app writes a report and exits cleanly instead of being jetsam'd, so the
-    /// evidence survives the death.
+    static func setScreen(_ name: String) {
+        currentScreen = name
+        breadcrumb("screen: \(name)")
+    }
+
+    /// One sample per second, kept in a small ring and breadcrumbed every five.
+    /// The complete one-second curve is written if the footprint runs away.
     static func startMemoryWatch() {
         Task {
             var ticks = 0
-            var last: Double = 0
+            var lastLogged: Double = 0
             while true {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 ticks += 1
 
+                let now = Date().timeIntervalSince1970
                 let footprint = memoryFootprintMB
+                let sample = String(format: "%.3f · %.1f MB · screen=%@", now, footprint, currentScreen)
+                diagnosticsLock.lock()
+                diagnosticsMemorySamples.append(sample)
+                if diagnosticsMemorySamples.count > diagnosticsMaxMemorySamples {
+                    diagnosticsMemorySamples.removeFirst(diagnosticsMemorySamples.count - diagnosticsMaxMemorySamples)
+                }
+                diagnosticsLock.unlock()
+
                 if ticks % 5 == 0 {
-                    breadcrumb(String(format: "mem: %.1f MB (Δ%+.1f) · screen=%@", footprint, footprint - last, currentScreen))
-                    last = footprint
+                    breadcrumb(String(format: "mem: %.1f MB (Δ%+.1f) · screen=%@", footprint, footprint - lastLogged, currentScreen))
+                    lastLogged = footprint
                 }
 
                 if footprint > 1100 {
@@ -252,7 +267,11 @@ enum Diagnostics {
     }
 
     private static func writeMemoryReport(_ footprint: Double) {
-        var report = String(format: "Footprint %.1f MB on screen %@\n\n", footprint, currentScreen)
+        diagnosticsLock.lock()
+        let curve = diagnosticsMemorySamples.joined(separator: "\n")
+        diagnosticsLock.unlock()
+
+        var report = String(format: "Footprint %.1f MB on screen %@\n\n1-second memory samples (epoch-seconds · MB · screen):\n%@\n\nBreadcrumbs:\n", footprint, currentScreen, curve)
         report += diagnosticsBreadcrumbText()
         diagnosticsWriteReport(prefix: "memory-runaway", contents: report)
         flush()
@@ -293,7 +312,13 @@ enum Diagnostics {
         )) ?? []
 
         return files
-            .filter { $0.lastPathComponent.hasPrefix("crash") || $0.lastPathComponent == "last-run.txt" }
+            .filter {
+                let name = $0.lastPathComponent
+                return name.hasPrefix("crash")
+                    || name.hasPrefix("memory-runaway")
+                    || name == "crash-signal.txt"
+                    || name == "last-run.txt"
+            }
             .sorted { left, right in
                 let l = (try? left.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
                 let r = (try? right.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast

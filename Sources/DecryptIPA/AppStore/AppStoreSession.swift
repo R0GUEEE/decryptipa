@@ -145,6 +145,7 @@ final class AppStoreSession: ObservableObject {
         pendingEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
         pendingPassword = password
         pendingRemember = rememberPassword
+        Diagnostics.breadcrumb("apple sign-in started · anisette=\(usesAnisette) · storefront=\(country)")
 
         let anisette = await anisetteHeaders()
         append(anisette == nil ? "Using the legacy App Store sign-in path (no anisette provider configured)."
@@ -198,6 +199,7 @@ final class AppStoreSession: ObservableObject {
         defer { busy = false }
 
         selectedOptionID = option.id
+        Diagnostics.breadcrumb("apple 2FA delivery requested · mode=\(challenge.mode.rawValue) · method=\(option.kind.rawValue)")
 
         do {
             if challenge.mode == .session {
@@ -247,6 +249,7 @@ final class AppStoreSession: ObservableObject {
         busy = true
         error = nil
         defer { busy = false }
+        Diagnostics.breadcrumb("apple 2FA code submitted · mode=\(challenge.mode.rawValue)")
 
         do {
             let account: AppStoreAccount
@@ -295,6 +298,7 @@ final class AppStoreSession: ObservableObject {
     }
 
     private func finishSignIn(_ account: AppStoreAccount) {
+        let passwordToRemember = pendingPassword
         self.account = account
         challenge = nil
         waitingForCode = false
@@ -304,7 +308,7 @@ final class AppStoreSession: ObservableObject {
             Keychain.save(data, account: Self.accountKey)
         }
         if pendingRemember {
-            Keychain.save(Data(pendingPassword.utf8), account: Self.passwordKey)
+            Keychain.save(Data(passwordToRemember.utf8), account: Self.passwordKey)
         } else if !savedPassword.isEmpty {
             Keychain.delete(account: Self.passwordKey)
         }

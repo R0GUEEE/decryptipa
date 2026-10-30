@@ -120,7 +120,7 @@ struct DecryptView: View {
                 onCompletion: handleImport
             )
             .onAppear {
-                Diagnostics.currentScreen = "decrypt"
+                Diagnostics.setScreen("decrypt")
                 library.refresh()
                 Diagnostics.breadcrumb(String(
                     format: "decrypt tab appeared · %d device(s) · %d output(s) · footprint %.1f MB",
@@ -128,6 +128,10 @@ struct DecryptView: View {
                 ))
             }
             .onDisappear { Diagnostics.breadcrumb("decrypt tab disappeared") }
+            .onChange(of: mode) { _, value in
+                Diagnostics.breadcrumb("decrypt source selected: \(value.rawValue)")
+                Diagnostics.setScreen("decrypt.source.\(value.rawValue)")
+            }
             .onChange(of: engine.phase) { _, phase in
                 if phase == .done { library.refresh() }
             }
@@ -210,7 +214,6 @@ struct DecryptView: View {
         }
         .padding(16)
         .cardSurface()
-        .onAppear { Diagnostics.currentScreen = "decrypt.device" }
     }
 
     // MARK: Input
@@ -307,6 +310,7 @@ struct DecryptView: View {
             }
 
             Button {
+                Diagnostics.breadcrumb("App Store utility button tapped")
                 if appStoreSession == nil {
                     Diagnostics.breadcrumb("appstore session: init started from dedicated card")
                     appStoreSession = AppStoreSession(outputDirectory: LibraryStore.defaultImportsRoot)
@@ -459,7 +463,6 @@ struct DecryptView: View {
         }
         .padding(14)
         .cardSurface()
-        .onAppear { Diagnostics.currentScreen = "decrypt.action" }
     }
 
     private var footer: some View {

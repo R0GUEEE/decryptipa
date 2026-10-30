@@ -65,9 +65,13 @@ struct AppStoreView: View {
                 }
             }
             .onAppear {
+                Diagnostics.setScreen("appstore")
                 if identifier.isEmpty, let app = session.app {
                     identifier = app.bundleID
                 }
+            }
+            .onChange(of: session.error) { _, error in
+                if error != nil { Diagnostics.breadcrumb("appstore error displayed") }
             }
         }
     }
@@ -348,8 +352,12 @@ struct SignInView: View {
                 AnisetteSettingsView(session: session)
             }
             .onAppear {
+                Diagnostics.setScreen(session.challenge == nil ? "appstore.signin" : "appstore.twofactor")
                 if email.isEmpty { email = session.account?.email ?? "" }
                 if password.isEmpty { password = session.savedPassword }
+            }
+            .onChange(of: session.challenge != nil) { _, isTwoFactor in
+                Diagnostics.setScreen(isTwoFactor ? "appstore.twofactor" : "appstore.signin")
             }
         }
     }
@@ -463,6 +471,7 @@ struct SignInView: View {
                 }
             } else {
                 Button("Sign in") {
+                    Diagnostics.breadcrumb("Apple ID sign-in form submitted")
                     Task {
                         await session.beginSignIn(email: email, password: password, rememberPassword: remember)
                         if session.account != nil { dismiss() }

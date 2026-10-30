@@ -55,8 +55,11 @@ Two decrypt input modes:
 Apple ID login and App Store lookup/download are a **separate App Store card** on
 the Decrypt screen, not a source-mode selection. It provides sign-in, 2FA,
 trusted-number SMS delivery when native attestation is configured, and session
-import. A downloaded IPA enters the decrypt workflow only after explicitly
-choosing **Use this IPA and decrypt** in the App Store utility.
+import. The utility opens at the account panel, so sign-in, 2FA, sign-out and
+session import are separate from app identifier lookup. The remembered Apple ID
+password is saved only when selected and retained correctly after the sign-in
+flow completes. A downloaded IPA enters the decrypt workflow only after
+explicitly choosing **Use this IPA and decrypt** in the App Store utility.
 
 ## App Store by identifier
 
