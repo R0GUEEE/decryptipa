@@ -117,6 +117,7 @@ enum Diagnostics {
             format: "launch %@ (%@) · iOS %@ · %@ · footprint %.1f MB",
             version, build, UIDevice.current.systemVersion, UIDevice.current.model, memoryFootprintMB
         ))
+        startMemoryWatch()
         flush()
     }
 
@@ -220,6 +221,41 @@ enum Diagnostics {
         }
         guard result == KERN_SUCCESS else { return 0 }
         return Double(info.resident_size) / 1_048_576
+    }
+
+    /// Set by the visible screen so memory samples say where the app was.
+    static var currentScreen: String = "launch"
+
+    /// One sample per second, written every five. If the footprint runs away the
+    /// app writes a report and exits cleanly instead of being jetsam'd, so the
+    /// evidence survives the death.
+    static func startMemoryWatch() {
+        Task {
+            var ticks = 0
+            var last: Double = 0
+            while true {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                ticks += 1
+
+                let footprint = memoryFootprintMB
+                if ticks % 5 == 0 {
+                    breadcrumb(String(format: "mem: %.1f MB (Δ%+.1f) · screen=%@", footprint, footprint - last, currentScreen))
+                    last = footprint
+                }
+
+                if footprint > 1100 {
+                    writeMemoryReport(footprint)
+                    exit(0)
+                }
+            }
+        }
+    }
+
+    private static func writeMemoryReport(_ footprint: Double) {
+        var report = String(format: "Footprint %.1f MB on screen %@\n\n", footprint, currentScreen)
+        report += diagnosticsBreadcrumbText()
+        diagnosticsWriteReport(prefix: "memory-runaway", contents: report)
+        flush()
     }
 
     static func breadcrumb(_ text: String) {

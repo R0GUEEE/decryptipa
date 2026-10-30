@@ -21,7 +21,9 @@ struct DecryptView: View {
     @EnvironmentObject private var library: LibraryStore
 
     @StateObject private var engine = DecryptEngine()
-    @StateObject private var appStoreSession = AppStoreSession(outputDirectory: LibraryStore.defaultImportsRoot)
+    // Created only when the App Store sheet is first opened: keeping keychain,
+    // UserDefaults and the URLSession out of the launch path.
+    @State private var appStoreSession: AppStoreSession?
 
     @State private var options = DecryptOptions()
     @State private var mode: InputMode = .ipa
@@ -48,6 +50,8 @@ struct DecryptView: View {
                 if let url = engine.outputURL {
                     resultSection(url: url)
                 }
+
+                actionSection
             }
             .navigationTitle("DecryptIPA")
             .toolbar {
@@ -67,7 +71,7 @@ struct DecryptView: View {
                     }
                 }
             }
-            .safeAreaInset(edge: .bottom, spacing: 0) { actionBar }
+
             .sheet(isPresented: $showingLog) {
                 LogSheet(engine: engine)
             }
@@ -75,17 +79,19 @@ struct DecryptView: View {
                 DevicesView()
             }
             .sheet(isPresented: $showingAppStore) {
-                AppStoreView(
-                    session: appStoreSession,
+                if let session = appStoreSession {
+                    AppStoreView(
+                        session: session,
                     onUseIPA: { url, _ in
                         inputURL = url
                         inputMetadata = try? IPATool.metadata(for: url)
                     },
-                    onUseInstalled: { bundleID in
-                        mode = .installed
-                        bundleIDText = bundleID
-                    }
-                )
+                        onUseInstalled: { bundleID in
+                            mode = .installed
+                            bundleIDText = bundleID
+                        }
+                    )
+                }
             }
             .fileImporter(
                 isPresented: $showingImporter,
@@ -95,6 +101,7 @@ struct DecryptView: View {
                 handleImport(result)
             }
             .onAppear {
+                Diagnostics.currentScreen = "decrypt"
                 library.refresh()
                 Diagnostics.breadcrumb(String(
                     format: "decrypt tab appeared · %d device(s) · %d output(s) · footprint %.1f MB",
@@ -183,23 +190,26 @@ struct DecryptView: View {
 
             case .appStore:
                 Button {
+                    if appStoreSession == nil {
+                        appStoreSession = AppStoreSession(outputDirectory: LibraryStore.defaultImportsRoot)
+                    }
                     showingAppStore = true
                 } label: {
-                    Label(appStoreSession.app == nil ? "Browse the App Store" : "Open App Store browser",
+                    Label((appStoreSession?.app == nil) ? "Browse the App Store" : "Open App Store browser",
                           systemImage: "bag")
                 }
 
-                if let app = appStoreSession.app {
+                if let app = appStoreSession?.app {
                     LabeledValue(label: "App", value: app.name)
                     LabeledValue(label: "Bundle id", value: app.bundleID)
                     LabeledValue(label: "Store version", value: app.version)
                 }
 
-                if let ticket = appStoreSession.ticket {
+                if let ticket = appStoreSession?.ticket {
                     LabeledValue(label: "Ticket", value: "\(ticket.version) · \(ticket.sinfs) sinf")
                 }
 
-                if let ipa = appStoreSession.downloadedIPA {
+                if let ipa = appStoreSession?.downloadedIPA {
                     LabeledValue(label: "Downloaded", value: ipa.lastPathComponent)
                     LabeledValue(label: "Size", value: ByteCountFormatter.string(fromByteCount: Int64((try? ipa.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0), countStyle: .file))
                 } else {
@@ -208,7 +218,7 @@ struct DecryptView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                if appStoreSession.account == nil {
+                if appStoreSession?.account == nil {
                     Label("Not signed in — the App Store tab handles sign-in and 2FA.", systemImage: "person.crop.circle")
                         .font(.caption)
                         .foregroundStyle(.orange)
@@ -325,15 +335,14 @@ struct DecryptView: View {
         }
     }
 
-    private var actionBar: some View {
-        VStack(spacing: 8) {
+    private var actionSection: some View {
+        Section {
             if engine.isRunning {
                 Button(role: .destructive) {
                     engine.cancel()
                 } label: {
                     Label("Cancel job", systemImage: "stop.circle")
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 6)
                 }
                 .buttonStyle(.borderedProminent)
             } else {
@@ -342,22 +351,18 @@ struct DecryptView: View {
                 } label: {
                     Label("Decrypt", systemImage: "lock.open.rotation")
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 6)
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(!canStart)
             }
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 10)
-        .background(.ultraThinMaterial)
     }
 
     private var canStart: Bool {
         guard store.selected != nil else { return false }
         switch mode {
         case .ipa: return inputURL != nil
-        case .appStore: return appStoreSession.downloadedIPA != nil
+        case .appStore: return appStoreSession?.downloadedIPA != nil
         case .installed: return !bundleIDText.trimmingCharacters(in: .whitespaces).isEmpty
         }
     }
@@ -375,7 +380,7 @@ struct DecryptView: View {
 
         // An App Store IPA is FairPlay-encrypted exactly like a local one, so the
         // install-time Info.plist patching applies unchanged.
-        let storeIPA = mode == .appStore ? appStoreSession.downloadedIPA : nil
+        let storeIPA = mode == .appStore ? appStoreSession?.downloadedIPA : nil
 
         Diagnostics.breadcrumb("job: start mode=\(mode.rawValue) device=\(device.endpoint) bundle=\(inputMetadata?.bundleID ?? bundleIDText) ipa=\(inputURL?.lastPathComponent ?? storeIPA?.lastPathComponent ?? "-")")
 
