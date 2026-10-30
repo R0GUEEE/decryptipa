@@ -147,6 +147,36 @@ enum Diagnostics {
         for url in sorted.dropFirst(10) {
             try? fileManager.removeItem(at: url)
         }
+
+        flagUnexpectedEnd(of: destination)
+    }
+
+    /// A run that never logged a background transition and never reached a crash
+    /// handler is the interesting case: the process vanished while foregrounded
+    /// (watchdog kill, jetsam, or a signal our handler could not write). Record
+    /// it next to the run file so it cannot be missed.
+    private static func flagUnexpectedEnd(of runURL: URL) {
+        let tail = lastStep(of: runURL)
+        guard !tail.isEmpty else { return }
+        guard !tail.contains("scenePhase: background") else { return }
+        guard !tail.contains("clean exit") else { return }
+
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        let report = """
+        Run ended without a shutdown transition
+        run file: \(runURL.lastPathComponent)
+        last recorded step: \(tail)
+
+        The foregrounded process disappeared without a signal or exception our
+        handlers could catch, which usually means a watchdog kill (main thread
+        blocked) or a jetsam eviction.
+
+        full run:
+        \(text(of: runURL))
+        """
+
+        diagnosticsWriteReport(prefix: "crash-suspected", contents: report)
     }
 
     /// Breadcrumb files from earlier launches, newest first.

@@ -18,7 +18,8 @@ struct DecryptIPAApp: App {
                 .onAppear { library.refresh() }
                 .onChange(of: scenePhase) { _, phase in
                     Diagnostics.breadcrumb("scenePhase: \(phase)")
-                    if phase != .active { Diagnostics.flush() }
+                    if phase == .background { Diagnostics.breadcrumb("clean exit") }
+                    Diagnostics.flush()
                 }
         }
     }
