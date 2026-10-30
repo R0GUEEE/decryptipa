@@ -16,10 +16,12 @@ struct RootScreen: View {
     @State private var inputMetadata: IPAMetadata?
     @State private var bundleIDText = ""
 
-    @State private var showingSettings = false
-    @State private var showingLog = false
-    @State private var showingDiagnostics = false
-    @State private var showingLibrary = false
+    @State private var sheet: SheetRoute?
+
+    private enum SheetRoute: String, Identifiable {
+        case settings, log, diagnostics, library
+        var id: String { rawValue }
+    }
 
     private let titles = ["Connect", "Apple ID", "Decrypt"]
 
@@ -49,30 +51,39 @@ struct RootScreen: View {
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button { showingLibrary = true } label: {
+                    Button { sheet = .library } label: {
                         Image(systemName: "folder")
                     }
                     .accessibilityLabel("Decrypted library")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button { showingSettings = true } label: {
+                    Button { sheet = .settings } label: {
                         Image(systemName: "gearshape")
                     }
                     .accessibilityLabel("Settings")
                 }
             }
-            .sheet(isPresented: $showingSettings) { settingsSheet }
-            .sheet(isPresented: $showingLog) { LogSheet(engine: engine) }
-            .sheet(isPresented: $showingDiagnostics) { DiagnosticsView() }
-            .sheet(isPresented: $showingLibrary) { LibraryView() }
-            .onAppear(perform: prepare)
-            .onChange(of: step) { _, value in preferences.lastStep = value }
-            .onChange(of: source) { _, value in preferences.preferredSource = value.rawValue }
-            .onChange(of: engine.phase) { _, phase in
-                if phase == .done { library.refresh() }
+            .sheet(item: $sheet) { route in
+                sheetContent(route)
             }
+            .onAppear(perform: prepare)
         }
         .preferredColorScheme(.dark)
+        .onChange(of: step) { _, value in preferences.lastStep = value }
+        .onChange(of: source) { _, value in preferences.preferredSource = value.rawValue }
+        .onChange(of: engine.phase) { _, phase in
+            if phase == .done { library.refresh() }
+        }
+    }
+
+    @ViewBuilder
+    private func sheetContent(_ route: SheetRoute) -> some View {
+        switch route {
+        case .settings: settingsSheet
+        case .log: LogSheet(engine: engine)
+        case .diagnostics: DiagnosticsView()
+        case .library: LibraryView()
+        }
     }
 
     // MARK: Steps
@@ -217,7 +228,7 @@ struct RootScreen: View {
                 .tint(Palette.muted)
 
                 Button {
-                    showingSettings = true
+                    sheet = .settings
                 } label: {
                     Label("Settings", systemImage: "gearshape")
                         .font(.caption.weight(.semibold))
@@ -242,20 +253,17 @@ struct RootScreen: View {
             engine: engine,
             session: appStore,
             onManageAccount: {
-                showingSettings = false
+                sheet = nil
                 step = 2
             },
             onShowDiagnostics: {
-                showingSettings = false
-                showingDiagnostics = true
+                sheet = .diagnostics
             },
             onShowLog: {
-                showingSettings = false
-                showingLog = true
+                sheet = .log
             },
             onShowLibrary: {
-                showingSettings = false
-                showingLibrary = true
+                sheet = .library
             }
         )
         .environmentObject(store)
