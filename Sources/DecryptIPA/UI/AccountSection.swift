@@ -102,7 +102,7 @@ struct AccountSection: View {
     private var credentialsBody: some View {
         VStack(alignment: .leading, spacing: 10) {
             FieldShell {
-                TextField("Apple ID", text: $email)
+                TextField("", text: $email, prompt: Text("Apple ID").foregroundColor(Palette.muted))
                     .textContentType(.username)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
@@ -114,9 +114,9 @@ struct AccountSection: View {
                 HStack(spacing: 8) {
                     Group {
                         if showingSecret {
-                            TextField("Password", text: $password)
+                            TextField("", text: $password, prompt: Text("Password").foregroundColor(Palette.muted))
                         } else {
-                            SecureField("Password", text: $password)
+                            SecureField("", text: $password, prompt: Text("Password").foregroundColor(Palette.muted))
                         }
                     }
                     .textContentType(.password)

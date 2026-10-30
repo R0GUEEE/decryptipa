@@ -99,7 +99,12 @@ extension AppStoreClient {
         case .blocked(let status, let detail):
             let first = detail.split(separator: "\n").first.map(String.init) ?? ""
             let trimmed = first.trimmingCharacters(in: .whitespaces)
-            let body = trimmed.isEmpty ? "no body" : String(trimmed.prefix(90))
+            let body: String
+            if trimmed.isEmpty || trimmed == "<empty response>" {
+                body = "no body"
+            } else {
+                body = String(trimmed.prefix(90))
+            }
             return "HTTP " + String(status) + " · " + body
         case .rateLimited(let status, _):
             return "HTTP " + String(status) + " · rate limited"
@@ -237,7 +242,7 @@ extension AppStoreClient {
         }
 
         guard response.statusCode == 200 else {
-            if response.statusCode == 401 || response.statusCode == 403 {
+            if (400..<500).contains(response.statusCode) {
                 throw AppStoreError.blocked(response.statusCode, AppStorePlist.snippet(data))
             }
             throw AppStoreError.signIn("Native sign-in failed (HTTP \(response.statusCode)): \(AppStorePlist.snippet(data))")

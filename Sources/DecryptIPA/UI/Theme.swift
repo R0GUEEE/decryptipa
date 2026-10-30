@@ -178,6 +178,7 @@ struct PrimaryButton: View {
         }
         .buttonStyle(.borderedProminent)
         .tint(tint)
+        .opacity(enabled && !busy ? 1 : 0.45)
         .disabled(!enabled || busy)
     }
 }
