@@ -78,10 +78,11 @@ final class DeviceService {
         let path = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         if !path.isEmpty { return path }
 
-        for candidate in ["/usr/local/bin/appinst", "/var/jb/usr/bin/appinst", "/var/jb/usr/local/bin/appinst"] {
-            if await transport.exists(candidate) { return candidate }
-        }
-        return nil
+        let candidates = try await transport.run(
+            "ls -1 /usr/local/bin/appinst /var/jb/usr/bin/appinst /var/jb/usr/local/bin/appinst 2>/dev/null | head -1"
+        )
+        let found = candidates.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        return found.isEmpty ? nil : found
     }
 
     func locateAppSync() async throws -> String? {
@@ -91,8 +92,11 @@ final class DeviceService {
             "/var/jb/Library/MobileSubstrate/DynamicLibraries/AppSyncUnified.dylib",
             "/Library/MobileSubstrate/DynamicLibraries/AppSyncUnified.dylib"
         ]
-        for candidate in candidates {
-            if await transport.exists(candidate) { return candidate }
+        let listing = try? await transport.run(
+            "ls -1 " + candidates.map { shellQuote($0) }.joined(separator: " ") + " 2>/dev/null | head -1"
+        )
+        if let first = listing?.stdout.trimmingCharacters(in: .whitespacesAndNewlines), !first.isEmpty {
+            return first
         }
 
         let result = try await transport.run(
@@ -112,11 +116,11 @@ final class DeviceService {
         let hex = digest.map { String(format: "%02x", $0) }.joined()
         let remote = "\(SSHTransport.helpersDir)/ipadecrypt-helper-arm64-\(hex.prefix(12)).bin"
 
-        if await transport.exists(remote) { return remote }
+        if await transport.pathExists(remote) { return remote }
 
-        try await transport.createDirectories(SSHTransport.helpersDir)
+        try await transport.makeDirectories(SSHTransport.helpersDir)
         try await transport.uploadData(data, to: remote, mode: 0o755)
-        guard await transport.exists(remote) else {
+        guard await transport.pathExists(remote) else {
             throw appFailure("Helper upload failed: \(remote) is not present after upload.")
         }
         return remote

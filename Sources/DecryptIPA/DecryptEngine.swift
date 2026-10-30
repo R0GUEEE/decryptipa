@@ -140,6 +140,20 @@ final class DecryptEngine: ObservableObject {
     /// Coalesces bursts of helper events into ~8 publishes per second. The
     /// decrypt stream can emit hundreds of lines; publishing each one re-lays
     /// out the Form while the engine is still writing bytes.
+    /// Records how much memory a step left behind. A site that jumps by hundreds
+    /// of MB is where a runaway allocation lives; a flat number next to a hang is
+    /// a watchdog problem instead.
+    private func mark(_ step: String) {
+        Diagnostics.breadcrumb(String(format: "step: %@ · footprint %.1f MB", step, Diagnostics.memoryFootprintMB))
+    }
+
+    private func guardMemory(_ stage: String) throws {
+        let footprint = Diagnostics.memoryFootprintMB
+        if footprint > 900 {
+            throw appFailure("Stopped before \(stage): the app is already holding \(Int(footprint)) MB and iOS would kill it. Report this with the diagnostics bundle.")
+        }
+    }
+
     private func append(_ text: String, _ level: LogLevel = .info) {
         pendingLog.append(LogEntry(level: level, text: text))
 
@@ -204,6 +218,7 @@ final class DecryptEngine: ObservableObject {
         self.transport = transport
         let service = DeviceService(transport: transport)
         append("SSH session established.", .success)
+        mark("ssh connected")
 
         try Task.checkCancellation()
 
@@ -211,10 +226,12 @@ final class DecryptEngine: ObservableObject {
         phase = .probing
         let probe = try await service.probe()
         self.probe = probe
+        mark("probe done")
         append("Device: \(probe.summary)", .success)
 
         let appinst = try await service.locateAppinst()
         let appSync = try await service.locateAppSync()
+        mark("tooling located")
         append(appinst == nil ? "appinst not found — installing a bundle will fail." : "appinst: \(appinst!)",
                appinst == nil ? .warn : .info)
         append(appSync == nil ? "AppSync Unified not detected — appinst installs will likely be rejected." : "AppSync: \(appSync!)",
@@ -231,6 +248,8 @@ final class DecryptEngine: ObservableObject {
             metadata = try IPATool.metadata(for: ipa)
         }
         self.metadata = metadata
+        mark("ipa inspected")
+        try guardMemory("uploading")
 
         if let metadata {
             append("Bundle \(metadata.bundleID) \(metadata.version) (\(metadata.build)) · minOS \(metadata.minimumOS) · \(ByteCountFormatter.string(fromByteCount: metadata.fileSize, countStyle: .file))", .info)
@@ -248,6 +267,7 @@ final class DecryptEngine: ObservableObject {
         append("Uploading helper if needed…", .command)
         let helper = try await service.ensureHelper()
         capabilities = service.capabilities(appinst: appinst, appSync: appSync, helper: helper)
+        mark("helper ready")
         append("Helper ready at \(helper)", .success)
 
         try await transport.createDirectories(SSHTransport.stagingDir)
@@ -257,6 +277,7 @@ final class DecryptEngine: ObservableObject {
 
         // ---- resolve installed copy
         var installed = try await service.findInstalled(bundleID: bundleID)
+        mark("install scan")
         if let installed {
             append("Installed on device: \(installed.bundlePath) (v\(installed.version))", .info)
         }
@@ -314,6 +335,7 @@ final class DecryptEngine: ObservableObject {
                 phase = .installing
                 append("Running \(appinst) — this can take a minute…", .command)
                 try await service.install(appinst: appinst, ipaRemote: remoteIPA)
+                mark("appinst finished")
                 append("appinst finished.", .success)
                 weInstalled = true
 
@@ -336,6 +358,8 @@ final class DecryptEngine: ObservableObject {
         // ---- decrypt
         phase = .decrypting
         append("Decrypting \(bundleID)…", .command)
+        mark("before decrypt")
+        try guardMemory("decrypting")
 
         let outputName = outputFileName(metadata: metadata, bundleID: bundleID, version: installed?.version ?? "?")
         let finalURL = request.outputDirectory.appendingPathComponent(outputName)
@@ -356,6 +380,9 @@ final class DecryptEngine: ObservableObject {
                 verbose: request.options.verboseHelper,
                 write: { data in
                     try sink.write(data)
+                    if sink.bytes / (256 << 20) != (sink.bytes - Int64(data.count)) / (256 << 20) {
+                        Diagnostics.breadcrumb(String(format: "stream: %lld B · footprint %.1f MB", sink.bytes, Diagnostics.memoryFootprintMB))
+                    }
                 },
                 onEvent: { [weak self] event in
                     Task { @MainActor in

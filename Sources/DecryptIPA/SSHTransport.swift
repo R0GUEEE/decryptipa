@@ -217,6 +217,21 @@ final class SSHTransport: @unchecked Sendable {
         }
     }
 
+    /// Existence check through the shell instead of SFTP: each `withSFTP` opens
+    /// a fresh SSH channel, and a job used to open half a dozen of them before
+    /// touching a byte. One exec is cheaper and far easier to reason about.
+    func pathExists(_ path: String) async -> Bool {
+        let result = try? await run("[ -e \(shellQuote(path)) ] && echo yes || echo no")
+        return (result?.stdout.contains("yes")).map { $0 } ?? false
+    }
+
+    func makeDirectories(_ path: String) async throws {
+        let result = try await runPrivileged("mkdir -p \(shellQuote(path))")
+        guard result.ok else {
+            throw appFailure("mkdir -p \(path) failed: \(result.combined.suffix(200))")
+        }
+    }
+
     func exists(_ path: String) async -> Bool {
         do {
             _ = try await client.withSFTP { sftp in

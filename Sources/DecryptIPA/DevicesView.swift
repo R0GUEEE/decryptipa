@@ -226,6 +226,7 @@ struct DeviceEditor: View {
     }
 
     private func test() async {
+        Diagnostics.breadcrumb("device test: start \(device.endpoint)")
         testing = true
         testLines = ["Connecting to \(device.endpoint)…"]
 
