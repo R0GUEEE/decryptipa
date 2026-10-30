@@ -84,6 +84,23 @@ key parsing, SHA-256 of the helper), and
 [ZIPFoundation](https://github.com/weichsel/ZIPFoundation) (IPA inspection,
 patching, verification).
 
+## Verification
+
+Two gates run in CI:
+
+* `tools/logic-check` compiles the device-free logic (`MachO.swift`,
+  `Events.swift`) into a command-line harness and asserts it against synthetic
+  fixtures: `cryptid` in `LC_ENCRYPTION_INFO` / `LC_ENCRYPTION_INFO_64`, thin
+  arm64 + armv7 + fat images, an encryption command that sits after a large
+  `LC_SEGMENT_64`, version ordering (`1.2 < 1.10`), and `@evt` parsing with
+  quoted messages. It caught two real defects before the first release: a
+  64-bit header-offset assumption in the fixture and `Version("abc")`
+  silently parsing as `0`.
+* `ipa` builds the unsigned app, then fails the build unless
+  `DecryptIPA.app/ipadecrypt-helper-arm64` exists, is a Mach-O, and the
+  executable's `Info.plist` carries `CFBundleIdentifier` and
+  `NSLocalNetworkUsageDescription`.
+
 ## Layout
 
 ```
@@ -94,7 +111,9 @@ Sources/DecryptIPA/
   Keychain.swift       generic-password storage
   SSHTransport.swift   Citadel wrapper: connect, exec, streaming exec, SFTP
   DeviceService.swift  probe, appinst/AppSync lookup, helper push, install,
-                       bundle resolution, helper streaming, @evt parsing
+                       bundle resolution, helper streaming
+  Events.swift         @evt record parser (shared with tools/logic-check)
+  MachO.swift          LC_ENCRYPTION_INFO(_64) cryptid reader + version compare
   IPA.swift            metadata read, patch-for-install, cryptid verification,
                        Mach-O analyser, version compare
   DecryptEngine.swift  job pipeline + progress state
