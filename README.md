@@ -45,18 +45,24 @@ DecryptIPA (this app) ──ssh/sftp──▶ jailbroken iPhone
   `Form`/`Section` tree. The action button is explicit about why it is disabled;
   advanced install/decrypt toggles live in a collapsed Options card.
 
-Three input modes:
+Two decrypt input modes:
 
 | Mode | Needs | Notes |
 | --- | --- | --- |
 | **IPA file** | `appinst` + AppSync Unified | Installs the bundle, decrypts, optionally uninstalls afterwards. |
-| **App Store** | Apple ID, `appinst` + AppSync Unified | Resolves an identifier, downloads the encrypted IPA from Apple, then runs the same install + decrypt path. |
 | **Installed app** | bundle id only | Decrypts an app that is already on the device. Nothing is uploaded. |
+
+Apple ID login and App Store lookup/download are a **separate App Store card** on
+the Decrypt screen, not a source-mode selection. It provides sign-in, 2FA,
+trusted-number SMS delivery when native attestation is configured, and session
+import. A downloaded IPA enters the decrypt workflow only after explicitly
+choosing **Use this IPA and decrypt** in the App Store utility.
 
 ## App Store by identifier
 
-The App Store tab takes any of the three identifiers ipadecrypt accepts and
-turns it into a decrypted IPA without a desktop:
+The separate App Store utility takes any of the three identifiers ipadecrypt
+accepts and downloads the encrypted IPA for the existing on-device decrypt
+pipeline:
 
 * `com.burbn.instagram` — bundle id
 * `389801252` — numeric track id
