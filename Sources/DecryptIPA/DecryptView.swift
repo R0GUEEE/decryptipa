@@ -94,7 +94,16 @@ struct DecryptView: View {
             ) { result in
                 handleImport(result)
             }
-            .onAppear { library.refresh() }
+            .onAppear {
+                library.refresh()
+                Diagnostics.breadcrumb(String(
+                    format: "decrypt tab appeared · %d device(s) · %d output(s) · footprint %.1f MB",
+                    store.devices.count, library.items.count, Diagnostics.memoryFootprintMB
+                ))
+            }
+            .onDisappear {
+                Diagnostics.breadcrumb("decrypt tab disappeared")
+            }
             .onChange(of: engine.phase) { _, phase in
                 if case .done = phase { library.refresh() }
             }
@@ -356,7 +365,12 @@ struct DecryptView: View {
     // MARK: Actions
 
     private func startJob() {
-        guard let device = store.selected else { return }
+        Diagnostics.breadcrumb("decrypt button tapped · mode=\(mode.rawValue)")
+
+        guard let device = store.selected else {
+            Diagnostics.breadcrumb("decrypt button: no device configured")
+            return
+        }
         let secrets = store.secrets(for: device)
 
         // An App Store IPA is FairPlay-encrypted exactly like a local one, so the
@@ -374,6 +388,7 @@ struct DecryptView: View {
             outputDirectory: library.root
         )
 
+        Diagnostics.breadcrumb("engine.start returning")
         engine.start(request)
     }
 

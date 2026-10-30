@@ -104,7 +104,7 @@ enum Diagnostics {
             object: nil,
             queue: .main
         ) { _ in
-            Diagnostics.breadcrumb("memory warning")
+            Diagnostics.breadcrumb(String(format: "memory warning · footprint %.1f MB", Diagnostics.memoryFootprintMB))
         }
 
         for value in [SIGABRT, SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGTRAP] as [Int32] {
@@ -113,7 +113,10 @@ enum Diagnostics {
 
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
-        breadcrumb("launch \(version) (\(build)) · iOS \(UIDevice.current.systemVersion) · \(UIDevice.current.model)")
+        breadcrumb(String(
+            format: "launch %@ (%@) · iOS %@ · %@ · footprint %.1f MB",
+            version, build, UIDevice.current.systemVersion, UIDevice.current.model, memoryFootprintMB
+        ))
         flush()
     }
 
@@ -203,6 +206,20 @@ enum Diagnostics {
             .last
             .map(String.init)?
             .trimmingCharacters(in: .whitespaces) ?? ""
+    }
+
+    /// Resident footprint in MB — jetsam kills correlate with this, watchdog
+    /// kills do not, so recording it separates the two.
+    static var memoryFootprintMB: Double {
+        var info = mach_task_basic_info()
+        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size / MemoryLayout<natural_t>.size)
+        let result = withUnsafeMutablePointer(to: &info) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { rebound in
+                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), rebound, &count)
+            }
+        }
+        guard result == KERN_SUCCESS else { return 0 }
+        return Double(info.resident_size) / 1_048_576
     }
 
     static func breadcrumb(_ text: String) {

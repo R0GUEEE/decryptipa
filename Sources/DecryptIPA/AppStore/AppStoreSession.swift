@@ -72,6 +72,7 @@ final class AppStoreSession: ObservableObject {
     ]
 
     init(outputDirectory: URL) {
+        Diagnostics.breadcrumb("appstore session: init started")
         self.outputDirectory = outputDirectory
 
         let guid: String
@@ -92,6 +93,7 @@ final class AppStoreSession: ObservableObject {
 
         self.client = AppStoreClient(guid: guid)
 
+        Diagnostics.breadcrumb("appstore session initialised")
         if let data = Keychain.load(account: Self.accountKey),
            let saved = try? JSONDecoder().decode(AppStoreAccount.self, from: data) {
             account = saved

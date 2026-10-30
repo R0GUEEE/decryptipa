@@ -15,6 +15,7 @@ final class DeviceStore: ObservableObject {
         try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
         fileURL = support.appendingPathComponent("devices.json")
         load()
+        Diagnostics.breadcrumb("device store: \(devices.count) profile(s)")
     }
 
     var selected: DeviceProfile? {
