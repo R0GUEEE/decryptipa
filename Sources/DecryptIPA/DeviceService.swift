@@ -287,8 +287,12 @@ enum EventParser {
 
 enum HelperBinary {
     static func load() throws -> Data {
-        guard let url = Bundle.main.url(forResource: "ipadecrypt-helper-arm64", withExtension: nil)
-                ?? Bundle.main.url(forResource: "ipadecrypt-helper-arm64", withExtension: "bin") else {
+        let candidates = [
+            Bundle.main.url(forResource: "ipadecrypt-helper-arm64", withExtension: nil),
+            Bundle.main.url(forResource: "ipadecrypt-helper-arm64", withExtension: "bin"),
+            Bundle.main.url(forResource: "ipadecrypt-helper-arm64", withExtension: nil, subdirectory: "Resources")
+        ]
+        guard let url = candidates.compactMap({ $0 }).first else {
             throw err("The bundled ipadecrypt helper is missing from the app.")
         }
         return try Data(contentsOf: url)
