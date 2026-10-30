@@ -10,6 +10,7 @@ struct AppStoreView: View {
 
     @State private var identifier = ""
     @State private var showingSignIn = false
+    @State private var showingImport = false
     @State private var showingLog = false
 
     var body: some View {
@@ -42,6 +43,9 @@ struct AppStoreView: View {
             }
             .sheet(isPresented: $showingSignIn) {
                 SignInView(session: session)
+            }
+            .sheet(isPresented: $showingImport) {
+                ImportSessionView(session: session)
             }
             .sheet(isPresented: $showingLog) {
                 NavigationStack {
@@ -146,6 +150,11 @@ struct AppStoreView: View {
                     showingSignIn = true
                 } label: {
                     Label("Sign in with Apple ID", systemImage: "person.crop.circle.badge.checkmark")
+                }
+                Button {
+                    showingImport = true
+                } label: {
+                    Label("Use an existing session", systemImage: "square.and.arrow.down")
                 }
             }
         } header: {
@@ -507,6 +516,53 @@ struct AnisetteSettingsView: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+}
+
+
+struct ImportSessionView: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var session: AppStoreSession
+
+    @State private var dsid = ""
+    @State private var token = ""
+    @State private var storefront = "143441"
+    @State private var pod = ""
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("dsPersonId / DSID (e.g. 1234567890)", text: $dsid)
+                        .keyboardType(.numberPad)
+                    TextField("passwordToken", text: $token)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    TextField("Storefront (e.g. 143441)", text: $storefront)
+                        .keyboardType(.numberPad)
+                    TextField("Pod (optional, e.g. 25)", text: $pod)
+                        .keyboardType(.numberPad)
+                } footer: {
+                    Text("Apple refuses unsigned sign-in from this app, but a token minted on a machine that can sign (ipatool, ipadecrypt) is accepted for licences and downloads. ipadecrypt keeps it in ~/.ipadecrypt/config.json, ipatool in the login keychain item.")
+                }
+
+                Section {
+                    Button("Use this session") {
+                        if session.importSession(dsid: dsid, token: token, storefront: storefront, pod: pod) {
+                            dismiss()
+                        }
+                    }
+                    .disabled(dsid.isEmpty || token.isEmpty || storefront.isEmpty)
+                }
+            }
+            .navigationTitle("Existing session")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
                 }
             }
         }

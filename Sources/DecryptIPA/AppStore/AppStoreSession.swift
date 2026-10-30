@@ -311,6 +311,48 @@ final class AppStoreSession: ObservableObject {
         append(status, .success)
     }
 
+    /// Adopts a session produced elsewhere (ipatool, ipadecrypt, a script).
+    /// Apple only requires the token from this point on, so a session harvested
+    /// on a machine that can sign is still usable for licences and downloads.
+    func importSession(dsid: String, token: String, storefront: String, pod: String) -> Bool {
+        let dsid = dsid.trimmingCharacters(in: .whitespacesAndNewlines)
+        let token = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        var storefront = storefront.trimmingCharacters(in: .whitespacesAndNewlines)
+        let pod = pod.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !dsid.isEmpty, !token.isEmpty, !storefront.isEmpty else {
+            error = "DSID, token and storefront are all required."
+            return false
+        }
+
+        // Apple accepts "143441" and returns "143441-1,29"; add the suffix when
+        // only the bare storefront id was pasted.
+        if !storefront.contains("-") {
+            storefront += "-1,29"
+        }
+
+        let account = AppStoreAccount(
+            email: account?.email ?? "imported session",
+            passwordToken: token,
+            directoryServicesID: dsid,
+            storeFront: storefront,
+            pod: pod,
+            name: "",
+            country: country
+        )
+
+        self.account = account
+        client.adopt(account)
+        if let data = try? JSONEncoder().encode(account) {
+            Keychain.save(data, account: Self.accountKey)
+        }
+
+        append("Imported App Store session for DSID \(dsid) (storefront \(storefront)).", .success)
+        status = "Session imported"
+        error = nil
+        return true
+    }
+
     func signOut() {
         account = nil
         app = nil
