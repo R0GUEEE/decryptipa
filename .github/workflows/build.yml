@@ -1,0 +1,94 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ipa:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain report
+        run: |
+          xcodebuild -version
+          swift --version
+          echo "SDK: $(xcrun --sdk iphoneos --show-sdk-version)"
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate project
+        run: xcodegen generate
+
+      - name: Resolve packages
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project DecryptIPA.xcodeproj \
+            -scheme DecryptIPA \
+            -clonedSourcePackagesDirPath build/SourcePackages
+
+      - name: Build (unsigned, device)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project DecryptIPA.xcodeproj \
+            -scheme DecryptIPA \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/DerivedData \
+            -clonedSourcePackagesDirPath build/SourcePackages \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build > build/xcodebuild.log 2>&1 || {
+              echo "=== xcodebuild failed ==="; tail -n 250 build/xcodebuild.log; exit 1;
+            }
+          tail -n 15 build/xcodebuild.log
+
+      - name: Verify bundle contents
+        run: |
+          APP="build/DerivedData/Build/Products/Release-iphoneos/DecryptIPA.app"
+          test -d "$APP"
+          test -f "$APP/DecryptIPA"
+          test -f "$APP/ipadecrypt-helper-arm64"
+          file "$APP/ipadecrypt-helper-arm64" | grep -q "Mach-O 64-bit arm64"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c "Print :NSLocalNetworkUsageDescription" "$APP/Info.plist"
+          lipo -info "$APP/DecryptIPA"
+
+      - name: Package IPA
+        id: package
+        run: |
+          set -euo pipefail
+          APP="build/DerivedData/Build/Products/Release-iphoneos/DecryptIPA.app"
+          VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP/Info.plist")
+          NAME="DecryptIPA-${VERSION}-unsigned"
+          rm -rf build/Payload "build/${NAME}.ipa"
+          mkdir -p build/Payload
+          cp -R "$APP" build/Payload/
+          # Strip extended attributes that break unzip on device installers.
+          xattr -cr build/Payload || true
+          (cd build && zip -qryD "${NAME}.ipa" Payload)
+          echo "ipa=build/${NAME}.ipa" >> "$GITHUB_OUTPUT"
+          shasum -a 256 "build/${NAME}.ipa" | tee "build/${NAME}.ipa.sha256"
+          ls -l "build/${NAME}.ipa"
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: DecryptIPA-unsigned
+          path: |
+            build/*.ipa
+            build/*.sha256
+            build/xcodebuild.log
+          if-no-files-found: error

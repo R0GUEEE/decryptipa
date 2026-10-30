@@ -1,0 +1,54 @@
+name: DecryptIPA
+options:
+  bundleIdPrefix: com.rogu
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+
+settings:
+  base:
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "1"
+    CODE_SIGNING_ALLOWED: NO
+    CODE_SIGNING_REQUIRED: NO
+    CODE_SIGN_IDENTITY: ""
+    SWIFT_VERSION: "5.9"
+    IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+    TARGETED_DEVICE_FAMILY: "1,2"
+    DEAD_CODE_STRIPPING: YES
+
+packages:
+  Citadel:
+    url: https://github.com/orlandos-nl/Citadel
+    from: "0.12.0"
+  Crypto:
+    url: https://github.com/apple/swift-crypto
+    from: "3.0.0"
+  ZIPFoundation:
+    url: https://github.com/weichsel/ZIPFoundation
+    from: "0.9.19"
+
+targets:
+  DecryptIPA:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources/DecryptIPA
+      - path: Resources
+        type: folder
+    dependencies:
+      - package: Citadel
+        product: Citadel
+      - package: Crypto
+        product: Crypto
+      - package: ZIPFoundation
+        product: ZIPFoundation
+    scheme:
+      gatherCoverageData: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.rogu.decryptipa
+        PRODUCT_NAME: DecryptIPA
+        INFOPLIST_FILE: build/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
