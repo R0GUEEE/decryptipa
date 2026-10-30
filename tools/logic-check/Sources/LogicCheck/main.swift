@@ -147,6 +147,41 @@ check(imageDone?["size"] == "2100000", "image size parsed")
 check(EventParser.parse("plain helper output") == nil, "non-event line ignored")
 check(EventParser.parse("@evt level=info msg=missing-name") == nil, "event without a name ignored")
 
+print("App Store identifier parsing")
+check(AppStoreIdentifier.parse("com.burbn.instagram") == .bundleID("com.burbn.instagram"), "bundle id parsed")
+check(AppStoreIdentifier.parse("389801252") == .trackID(389801252), "numeric track id parsed")
+if case .url(_, let id)? = AppStoreIdentifier.parse("https://apps.apple.com/us/app/instagram/id389801252") {
+    check(id == 389801252, "apps.apple.com link yields the track id")
+} else {
+    check(false, "apps.apple.com link parsed as a URL")
+}
+check(AppStoreIdentifier.parse("https://apps.apple.com/app/id123456789?mt=8") != nil, "link with query parsed")
+check(AppStoreIdentifier.parse("not a bundle id") == nil, "free text rejected")
+check(AppStoreIdentifier.parse("") == nil, "empty input rejected")
+check(AppStoreIdentifier.parse("trailing.") == nil, "trailing dot rejected")
+check(AppStoreIdentifier.trackID(inPath: "/us/app/name/id555") == 555, "track id found in a path")
+
+print("App Store plist handling")
+let bodyData = AppStorePlist.body(["appleId": "a&b<c>", "attempt": "1", "salableAdamId": "42"], integers: ["salableAdamId"])
+let bodyText = String(decoding: bodyData, as: UTF8.self)
+check(bodyText.contains("<key>appleId</key><string>a&amp;b&lt;c&gt;</string>"), "XML escaped")
+check(bodyText.contains("<key>salableAdamId</key><integer>42</integer>"), "declared keys render as integers")
+check(bodyText.contains("<key>attempt</key><string>1</string>"), "other numbers stay strings")
+check(bodyText.hasPrefix("<?xml"), "plist header present")
+
+let wrapped = Data("<Document><plist version=\"1.0\"><dict><key>failureType</key><string>9610</string></dict></plist></Document>".utf8)
+check((try? AppStorePlist.parse(wrapped))?["failureType"] as? String == "9610", "<Document> wrapper normalised")
+let bare = Data("<key>dsPersonId</key><string>123</string><key>passwordToken</key><string>tok</string>".utf8)
+check((try? AppStorePlist.parse(bare))?["passwordToken"] as? String == "tok", "bare key/value run wrapped in a dict")
+let dictOnly = Data("<dict><key>status</key><integer>0</integer></dict>".utf8)
+check((try? AppStorePlist.parse(dictOnly))?["status"] as? Int == 0, "dict without a plist envelope parsed")
+
+check(AppStoreClient.isAllowedAuthEndpoint("https://buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/authenticate/"), "pod auth endpoint allowed")
+check(AppStoreClient.isAllowedAuthEndpoint("https://p25-buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/authenticate"), "per-pod host allowed")
+check(!AppStoreClient.isAllowedAuthEndpoint("https://evil.example.com/WebObjects/MZFinance.woa/wa/authenticate"), "foreign host rejected")
+check(AppStoreClient.dispatchURL("https://downloaddispatch.itunes.apple.com/ignored", "/r/redownload", guid: "AABBCCDDEEFF")?
+    .hasPrefix("https://downloaddispatch.itunes.apple.com/r/redownload?guid=AABBCCDDEEFF") == true, "dispatch URL rebuilt from the bag")
+
 print("")
 if failures == 0 {
     print("all checks passed")

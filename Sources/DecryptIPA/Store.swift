@@ -88,7 +88,9 @@ final class LibraryStore: ObservableObject {
         return directory
     }
 
-    var importsRoot: URL {
+    var importsRoot: URL { Self.defaultImportsRoot }
+
+    static var defaultImportsRoot: URL {
         let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let directory = documents.appendingPathComponent("Imports")
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
