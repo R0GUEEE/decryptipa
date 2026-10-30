@@ -55,11 +55,17 @@ Two decrypt input modes:
 Apple ID login and App Store lookup/download are a **separate App Store card** on
 the Decrypt screen, not a source-mode selection. It provides sign-in, 2FA,
 trusted-number SMS delivery when native attestation is configured, and session
-import. The utility opens at the account panel, so sign-in, 2FA, sign-out and
-session import are separate from app identifier lookup. The remembered Apple ID
-password is saved only when selected and retained correctly after the sign-in
-flow completes. A downloaded IPA enters the decrypt workflow only after
-explicitly choosing **Use this IPA and decrypt** in the App Store utility.
+import. The utility opens at the account panel, so sign-in, 2FA, sign-out and session
+import are separate from app identifier lookup. The remembered Apple ID password
+is saved only when selected. The selected Anisette provider is provisioned
+automatically before first sign-in. DecryptIPA fetches
+`https://servers.sidestore.io/servers.json`, caches its HTTPS choices, starts from
+the selected server and rotates through the public list if provisioning or
+header fetch fails; the first server returning valid headers is remembered.
+Apple 2FA accepts an existing 6-digit code and can request an SMS to a trusted
+number or a trusted-device prompt; Apple's current idmsa challenge does not
+expose email-code delivery. A downloaded IPA enters the decrypt workflow only
+after explicitly choosing **Use this IPA and decrypt** in the App Store utility.
 
 ## App Store by identifier
 

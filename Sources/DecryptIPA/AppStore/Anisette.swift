@@ -138,11 +138,14 @@ struct AnisetteProvider {
 /// HTTPS Anisette-v3 endpoints published by the SideStore anisette-servers
 /// project. Keep the list explicit, reviewed and HTTPS-only; do not fetch a
 /// provider list at runtime and trust arbitrary server-supplied URLs.
-struct AnisetteServerOption: Identifiable, Hashable {
+struct AnisetteServerOption: Identifiable, Hashable, Codable {
     let name: String
     let url: String
     var id: String { url }
 
+    static let catalogURL = URL(string: "https://servers.sidestore.io/servers.json")!
+
+    /// Bundled safe fallback if the live SideStore catalog is unreachable.
     static let publicOptions: [AnisetteServerOption] = [
         .init(name: "SideStore", url: "https://ani.sidestore.io"),
         .init(name: "SideStore · app", url: "https://ani.sidestore.app"),
@@ -164,6 +167,56 @@ struct AnisetteServerOption: Identifiable, Hashable {
         .init(name: "uwucloud", url: "https://ani.uwucloud.fun"),
         .init(name: "Lill q", url: "https://anisette.lillq.me")
     ]
+
+    private struct CatalogPayload: Decodable {
+        let servers: [CatalogServer]
+    }
+
+    private struct CatalogServer: Decodable {
+        let name: String
+        let address: String
+        let kind: Int?
+    }
+
+    /// Downloads the same catalog SideStore uses. Only HTTPS endpoints with a
+    /// valid host are accepted, duplicates are removed, and the list is capped.
+    static func fetchPublicOptions() async throws -> [AnisetteServerOption] {
+        var request = URLRequest(url: catalogURL)
+        request.timeoutInterval = 15
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 15
+        configuration.timeoutIntervalForResource = 20
+        configuration.waitsForConnectivity = false
+        let session = URLSession(configuration: configuration)
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            let code = (response as? HTTPURLResponse)?.statusCode ?? -1
+            throw appFailure("SideStore server catalog returned HTTP " + String(code) + ".")
+        }
+
+        let payload = try JSONDecoder().decode(CatalogPayload.self, from: data)
+        var seen = Set<String>()
+        let options = payload.servers.compactMap { server -> AnisetteServerOption? in
+            guard let url = URL(string: server.address),
+                  url.scheme?.lowercased() == "https",
+                  url.host != nil,
+                  seen.insert(url.absoluteString).inserted else { return nil }
+            return AnisetteServerOption(name: server.name, url: url.absoluteString)
+        }
+
+        guard !options.isEmpty else {
+            throw appFailure("SideStore's catalog contained no usable HTTPS Anisette servers.")
+        }
+        return Array(options.prefix(40))
+    }
+
+    static func rotated(_ options: [AnisetteServerOption], startingAt url: String) -> [AnisetteServerOption] {
+        guard !options.isEmpty else { return [] }
+        let start = options.firstIndex(where: { $0.url == url }) ?? 0
+        return Array(options[start...]) + Array(options[..<start])
+    }
 
     static func isPublic(_ url: String) -> Bool {
         publicOptions.contains(where: { $0.url == url })

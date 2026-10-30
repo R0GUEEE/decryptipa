@@ -66,6 +66,7 @@ struct AppStoreView: View {
             }
             .onAppear {
                 Diagnostics.setScreen("appstore")
+                Task { await session.refreshPublicAnisetteServers() }
                 if identifier.isEmpty, let app = session.app {
                     identifier = app.bundleID
                 }
@@ -422,7 +423,9 @@ struct SignInView: View {
         } header: {
             Text("Receive the code")
         } footer: {
-            Text("Tap a number to have Apple send a text message.")
+            Text(challenge.mode == .session
+                 ? "Tap a trusted phone to request an SMS, or a trusted device to request its prompt. Enter Apple's 6-digit code below. Apple's current idmsa challenge does not expose email-code delivery."
+                 : "Apple's legacy sign-in has already requested a code by text; enter the 6-digit code below or tap Resend. Email-code delivery is not available in this challenge.")
         }
     }
 
@@ -493,21 +496,32 @@ struct AnisetteSettingsView: View {
             Form {
                 Section {
                     LabeledValue(label: "Setup", value: session.automaticAnisetteReady ? "Ready" : "Not configured")
-                    Picker("Public server", selection: $session.automaticAnisetteServer) {
-                        ForEach(AnisetteServerOption.publicOptions) { option in
-                            Text(option.name).tag(option.url)
+                    HStack(spacing: 8) {
+                        Picker("Public server", selection: $session.automaticAnisetteServer) {
+                            ForEach(session.anisetteServerOptions) { option in
+                                Text(option.name).tag(option.url)
+                            }
+                            if !session.anisetteServerOptions.contains(where: { $0.url == session.automaticAnisetteServer }) {
+                                Text("Custom server").tag(session.automaticAnisetteServer)
+                            }
                         }
-                        if !AnisetteServerOption.isPublic(session.automaticAnisetteServer) {
-                            Text("Custom server").tag(session.automaticAnisetteServer)
+                        Button {
+                            Task { await session.refreshPublicAnisetteServers(force: true) }
+                        } label: {
+                            if session.anisetteCatalogRefreshing { ProgressView().controlSize(.small) }
+                            else { Image(systemName: "arrow.clockwise") }
                         }
+                        .buttonStyle(.borderless)
+                        .disabled(session.anisetteCatalogRefreshing)
+                        .accessibilityLabel("Refresh public Anisette server list")
                     }
-                    if !AnisetteServerOption.isPublic(session.automaticAnisetteServer) {
+                    if !session.anisetteServerOptions.contains(where: { $0.url == session.automaticAnisetteServer }) {
                         TextField("Custom HTTPS server URL", text: $session.automaticAnisetteServer)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                             .keyboardType(.URL)
                     }
-                    Text("The selected provider is provisioned automatically before the first Apple sign-in. You can change providers here; changing server clears its saved server-bound identity and reprovisions on next sign-in.")
+                    Text("The selected provider is provisioned automatically before the first Apple sign-in. If provisioning or header fetching fails, DecryptIPA rotates through the live SideStore public HTTPS list and saves the first working server. Changing providers clears the previous server-bound identity.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Button {
@@ -531,21 +545,6 @@ struct AnisetteSettingsView: View {
                     Text("Automatic Anisette (RemoteAnisette)")
                 } footer: {
                     Text("One-time provisioning stores a per-device Anisette identity and ADI blob in Keychain; sign-in can then fetch rotating headers automatically. The selected HTTPS server participates in the Apple provisioning exchange and can observe its protocol traffic/device identifier. Do not use a server you do not trust. Your Apple ID password is not entered into this provisioning step.")
-                }
-
-                Section {
-                    TextField("https://ani.example.com", text: $session.anisetteURL)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .keyboardType(.URL)
-                    TextField("Basic auth user (optional)", text: $session.anisetteUser)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                    SecureField("Basic auth password (optional)", text: $session.anisettePassword)
-                } header: {
-                    Text("Existing anisette-v3 endpoint")
-                } footer: {
-                    Text("Optional legacy integration: a GET endpoint returning X-Apple-I-MD / X-Apple-I-MD-M JSON headers. When configured, it takes precedence over the saved RemoteAnisette identity.")
                 }
 
                 Section {
@@ -584,7 +583,10 @@ struct AnisetteSettingsView: View {
                 Text("The server at " + host + " will participate in the Anisette provisioning handshake. Its operator can see the device identity and protocol traffic. Continue only if you trust this server.")
             }
         }
-        .onAppear { Diagnostics.setScreen("appstore.anisette") }
+        .onAppear {
+            Diagnostics.setScreen("appstore.anisette")
+            Task { await session.refreshPublicAnisetteServers() }
+        }
     }
 }
 

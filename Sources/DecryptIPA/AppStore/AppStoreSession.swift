@@ -53,8 +53,11 @@ final class AppStoreSession: ObservableObject {
         }
     }
     @Published private(set) var automaticAnisetteReady = false
+    @Published private(set) var anisetteServerOptions = AnisetteServerOption.publicOptions
+    @Published private(set) var anisetteCatalogRefreshing = false
 
     private var automaticAnisetteUser: AnisetteUser? = nil
+    private var anisetteCatalogFetchedAt: Date? = nil
     private static let accountKey = "appstore.account"
     private static let passwordKey = "appstore.password"
     private static let guidKey = "appstore.guid"
@@ -64,6 +67,8 @@ final class AppStoreSession: ObservableObject {
     private static let anisettePasswordKey = "appstore.anisette.password"
     private static let automaticAnisetteServerKey = "appstore.anisette.auto.server"
     private static let automaticAnisetteUserKey = "appstore.anisette.auto.user"
+    private static let anisetteServerListKey = "appstore.anisette.server.list"
+    private static let anisetteServerListDateKey = "appstore.anisette.server.list.date"
     private static let widgetKeyKey = "appstore.widgetkey"
 
     private let guid: String
@@ -109,6 +114,12 @@ final class AppStoreSession: ObservableObject {
             .flatMap { String(data: $0, encoding: .utf8) } ?? ""
         self.automaticAnisetteServer = defaults.string(forKey: Self.automaticAnisetteServerKey)
             ?? "https://ani.sidestore.io"
+        if let cached = defaults.data(forKey: Self.anisetteServerListKey),
+           let options = try? JSONDecoder().decode([AnisetteServerOption].self, from: cached),
+           !options.isEmpty {
+            self.anisetteServerOptions = options
+        }
+        self.anisetteCatalogFetchedAt = defaults.object(forKey: Self.anisetteServerListDateKey) as? Date
         self.automaticAnisetteUser = nil
 
         self.client = AppStoreClient(guid: guid)
@@ -175,8 +186,7 @@ final class AppStoreSession: ObservableObject {
         pendingRemember = rememberPassword
         Diagnostics.breadcrumb("apple sign-in started · anisette=\(usesAnisette) · storefront=\(country)")
 
-        if anisetteURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-           !automaticAnisetteReady {
+        if !automaticAnisetteReady {
             do {
                 let address = automaticAnisetteServer.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard let url = URL(string: address), url.scheme?.lowercased() == "https", url.host != nil else {
@@ -414,6 +424,34 @@ final class AppStoreSession: ObservableObject {
 
     // MARK: - Anisette
 
+    /// Refreshes the SideStore public catalog, retaining the last good copy if
+    /// offline. The list endpoint is fixed to servers.sidestore.io and candidate
+    /// URLs are HTTPS-validated by AnisetteServerOption.
+    func refreshPublicAnisetteServers(force: Bool = false) async {
+        if anisetteCatalogRefreshing { return }
+        if !force, let anisetteCatalogFetchedAt,
+           Date().timeIntervalSince(anisetteCatalogFetchedAt) < 6 * 60 * 60 {
+            return
+        }
+
+        anisetteCatalogRefreshing = true
+        defer { anisetteCatalogRefreshing = false }
+        do {
+            let options = try await AnisetteServerOption.fetchPublicOptions()
+            anisetteServerOptions = options
+            anisetteCatalogFetchedAt = Date()
+            if let data = try? JSONEncoder().encode(options) {
+                defaults.set(data, forKey: Self.anisetteServerListKey)
+            }
+            defaults.set(anisetteCatalogFetchedAt, forKey: Self.anisetteServerListDateKey)
+            append("Updated public Anisette server list (" + String(options.count) + " HTTPS servers).", .info)
+        } catch {
+            let message = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+            append("Could not refresh SideStore server list; using cached public options. " + message, .warn)
+            if anisetteServerOptions.isEmpty { anisetteServerOptions = AnisetteServerOption.publicOptions }
+        }
+    }
+
     /// Explicitly tests/configures the selected server from Advanced settings.
     /// First sign-in also invokes this automatically if no session is saved.
     func configureAutomaticAnisette() async {
@@ -439,23 +477,53 @@ final class AppStoreSession: ObservableObject {
         }
     }
 
-    private func provisionAutomaticAnisette(at url: URL) async throws {
-        let host = url.host ?? url.absoluteString
-        status = "Provisioning Anisette with " + host + "…"
-        Diagnostics.breadcrumb("anisette provisioning started · host=" + host)
+    private func provisionAutomaticAnisette(at preferredURL: URL) async throws -> AnisetteHeaders {
+        await refreshPublicAnisetteServers()
 
-        let user = try await AnisetteUser.provision(url: url)
-        let headers = try AnisetteHeaders.validated(await user.fetchHeaders())
-        guard let data = try? JSONEncoder().encode(user) else {
-            throw appFailure("Could not store the Anisette device state.")
+        var candidates = AnisetteServerOption.rotated(anisetteServerOptions, startingAt: preferred)
+        if !candidates.contains(where: { $0.url == preferred }) {
+            candidates.insert(AnisetteServerOption(name: "Selected", url: preferred), at: 0)
         }
 
-        Keychain.save(data, account: Self.automaticAnisetteUserKey)
-        automaticAnisetteUser = user
-        automaticAnisetteReady = true
-        status = "Anisette is ready for Apple sign-in"
-        append("Anisette provisioned from " + host + "; headers validated (OTP " + String(headers.values["X-Apple-I-MD"]?.count ?? 0) + " chars).", .success)
-        Diagnostics.breadcrumb("anisette provisioning completed · host=" + host)
+        var failures: [String] = []
+        for (index, option) in candidates.enumerated() {
+            guard let url = URL(string: option.url), url.scheme?.lowercased() == "https", url.host != nil else {
+                continue
+            }
+            let host = url.host ?? option.url
+            status = "Setting up Anisette · server " + String(index + 1) + " of " + String(candidates.count)
+            Diagnostics.breadcrumb("anisette provision attempt " + String(index + 1) + "/" + String(candidates.count) + " · " + host)
+
+            do {
+                let user = try await AnisetteUser.provision(url: url)
+                let headers = try AnisetteHeaders.validated(await user.fetchHeaders())
+                guard let data = try? JSONEncoder().encode(user) else {
+                    throw appFailure("Could not store the Anisette device state.")
+                }
+
+                // Remember the first server that successfully provisions and
+                // returns usable rotating headers. didSet clears any old server-
+                // bound identity before the new one is stored.
+                if automaticAnisetteServer != option.url {
+                    automaticAnisetteServer = option.url
+                }
+                Keychain.save(data, account: Self.automaticAnisetteUserKey)
+                automaticAnisetteUser = user
+                automaticAnisetteReady = true
+                status = "Anisette is ready · " + option.name
+                append("Anisette ready from " + host + "; rotating headers validated.", .success)
+                Diagnostics.breadcrumb("anisette server selected · " + host)
+                return headers
+            } catch {
+                let reason = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+                failures.append(host + ": " + reason)
+                append("Anisette server failed; trying next provider. " + host, .warn)
+                Diagnostics.breadcrumb("anisette server failed · " + host + " · " + reason)
+            }
+        }
+
+        let details = failures.suffix(4).joined(separator: " | ")
+        throw appFailure("All " + String(candidates.count) + " public Anisette servers failed." + (details.isEmpty ? "" : " " + details))
     }
 
     func removeAutomaticAnisette() {
@@ -467,36 +535,58 @@ final class AppStoreSession: ObservableObject {
     }
 
     private func anisetteHeaders() async -> AnisetteHeaders? {
-        do {
-            let providerHeaders: AnisetteHeaders
-            let manualEndpoint = anisetteURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let automaticAnisetteUser {
+            do {
+                return mergeLocalHeaders(try AnisetteHeaders.validated(await automaticAnisetteUser.fetchHeaders()))
+            } catch {
+                let host = automaticAnisetteUser.url.host ?? "unknown"
+                let message = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+                append("Anisette server failed; rotating through SideStore's public list. " + host, .warn)
+                Diagnostics.breadcrumb("anisette fetch failed · rotating from " + host + " · " + message)
+                do {
+                    let preferred = URL(string: automaticAnisetteServer) ?? AnisetteServerOption.catalogURL
+                    return mergeLocalHeaders(try await provisionAutomaticAnisette(at: preferred))
+                } catch {
+                    append((error as? LocalizedError)?.errorDescription ?? String(describing: error), .error)
+                }
+            }
+        } else {
+            do {
+                let preferred = URL(string: automaticAnisetteServer) ?? AnisetteServerOption.catalogURL
+                return mergeLocalHeaders(try await provisionAutomaticAnisette(at: preferred))
+            } catch {
+                append((error as? LocalizedError)?.errorDescription ?? String(describing: error), .error)
+            }
+        }
 
-            if !manualEndpoint.isEmpty {
+        // Backward compatibility only: migrate users who had a manually entered
+        // single endpoint in earlier builds. New setups always prefer the public
+        // SideStore catalog and rotate through its providers.
+        let manualEndpoint = anisetteURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !manualEndpoint.isEmpty {
+            do {
                 let provider = AnisetteProvider(
                     endpoint: manualEndpoint,
                     username: anisetteUser,
                     password: anisettePassword,
                     guid: guid
                 )
-                providerHeaders = try await provider.headers()
-            } else if let automaticAnisetteUser {
-                providerHeaders = try AnisetteHeaders.validated(await automaticAnisetteUser.fetchHeaders())
-            } else {
-                return nil
+                return mergeLocalHeaders(try await provider.headers())
+            } catch {
+                let message = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+                append("Legacy Anisette endpoint also failed: " + message, .error)
             }
-
-            var values = providerHeaders.values
-            for (key, value) in AnisetteHeaders.local(guid: guid).values where values[key] == nil {
-                values[key] = value
-            }
-            append("Anisette: X-Apple-I-MD " + String(values["X-Apple-I-MD"]?.count ?? 0) + " chars.", .debug)
-            return AnisetteHeaders(values: values)
-        } catch {
-            let message = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
-            append(message, .error)
-            Diagnostics.breadcrumb("anisette fetch failed · " + message)
-            return nil
         }
+        return nil
+    }
+
+    private func mergeLocalHeaders(_ headers: AnisetteHeaders) -> AnisetteHeaders {
+        var values = headers.values
+        for (key, value) in AnisetteHeaders.local(guid: guid).values where values[key] == nil {
+            values[key] = value
+        }
+        append("Anisette: X-Apple-I-MD " + String(values["X-Apple-I-MD"]?.count ?? 0) + " chars.", .debug)
+        return AnisetteHeaders(values: values)
     }
 
     // MARK: - Lookup
