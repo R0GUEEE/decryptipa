@@ -15,5 +15,7 @@ cp "$APP_SOURCES/Events.swift" "$DEST/Events.swift"
 cp "$APP_SOURCES/Models.swift" "$DEST/Models.swift"
 cp "$APP_SOURCES/AppStore/AppStoreLookup.swift" "$DEST/AppStoreLookup.swift"
 cp "$APP_SOURCES/AppStore/AppStoreClient.swift" "$DEST/AppStoreClient.swift"
+cp "$APP_SOURCES/AppStore/Anisette.swift" "$DEST/Anisette.swift"
+cp "$APP_SOURCES/AppStore/TwoFactor.swift" "$DEST/TwoFactor.swift"
 
 swift run -c release LogicCheck

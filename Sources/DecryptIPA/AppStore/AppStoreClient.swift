@@ -82,10 +82,12 @@ final class AppStoreClient {
     static let redownloadPath = "/r/redownload"
     static let updatePath = "/up/updateProduct"
 
-    private let http: AppStoreHTTP
-    private let guid: String
+    let http: AppStoreHTTP
+    let guid: String
     private var bag: AppStoreBag?
     private(set) var account: AppStoreAccount?
+    /// Why native auth was skipped or failed, for the UI to surface.
+    var lastNativeFailure: String?
 
     init(guid: String) {
         self.guid = guid

@@ -151,7 +151,7 @@ struct AppStoreView: View {
         } header: {
             Text("Account")
         } footer: {
-            Text("The password is only used to obtain an App Store token and is stored in the keychain when you ask for it. Two-factor codes are appended to the same sign-in request, exactly like the desktop tool.")
+            Text("The password is only used to obtain an App Store token and is stored in the keychain when you ask for it. With an anisette provider configured, two-factor sign-in lets you pick a trusted number to receive the text; otherwise Apple texts your trusted phone and you type the code.")
         }
     }
 
@@ -256,72 +256,217 @@ struct SignInView: View {
 
     @State private var email = ""
     @State private var password = ""
-    @State private var authCode = ""
     @State private var remember = true
-    @State private var needsCode = false
+    @State private var code = ""
+    @State private var showingAdvanced = false
 
     var body: some View {
         NavigationStack {
             Form {
-                Section {
-                    TextField("Apple ID", text: $email)
-                        .textContentType(.username)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .keyboardType(.emailAddress)
-                    SecureField("Password", text: $password)
-                        .textContentType(.password)
-                    TextField("6-digit 2FA code (if prompted)", text: $authCode)
-                        .keyboardType(.numberPad)
-                    Toggle("Remember password in the keychain", isOn: $remember)
-                } footer: {
-                    Text("If Apple asks for two-factor verification, the first attempt returns a code prompt. Enter the code here and submit again — the code is appended to the password just like ipadecrypt's desktop flow.")
+                if let challenge = session.challenge {
+                    challengeSection(challenge)
+                } else {
+                    credentialSection
                 }
 
-                if let error = session.error, needsCode {
+                if let error = session.error {
                     Section {
-                        Text(error).font(.caption).foregroundStyle(.orange)
+                        Text(error)
+                            .font(.caption)
+                            .foregroundStyle(.orange)
                     }
                 }
 
-                Section {
-                    if session.busy {
-                        HStack {
-                            ProgressView().controlSize(.small)
-                            Text("Signing in…").font(.caption)
-                        }
-                    } else {
-                        Button("Sign in") { submit() }
-                            .disabled(email.isEmpty || password.isEmpty)
-                    }
-                }
+                actionSection
             }
-            .navigationTitle("Apple ID")
+            .navigationTitle(session.challenge == nil ? "Apple ID" : "Two-factor")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button("Cancel") {
+                        session.cancelChallenge()
+                        dismiss()
+                    }
                 }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showingAdvanced = true
+                    } label: {
+                        Image(systemName: "gearshape")
+                    }
+                }
+            }
+            .sheet(isPresented: $showingAdvanced) {
+                AnisetteSettingsView(session: session)
             }
             .onAppear {
                 if email.isEmpty { email = session.account?.email ?? "" }
                 if password.isEmpty { password = session.savedPassword }
             }
-            .onChange(of: session.error) { _, error in
-                if let error, error.contains("two-factor") {
-                    needsCode = true
+        }
+    }
+
+    // MARK: Credentials
+
+    private var credentialSection: some View {
+        Section {
+            TextField("Apple ID", text: $email)
+                .textContentType(.username)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .keyboardType(.emailAddress)
+            SecureField("Password", text: $password)
+                .textContentType(.password)
+            Toggle("Remember password in the keychain", isOn: $remember)
+        } footer: {
+            Text(session.usesAnisette
+                 ? "Native sign-in with anisette: if Apple requires two-factor, you can choose which trusted number gets the text."
+                 : "Without an anisette provider the app uses Apple's classic App Store sign-in. When a code is required, Apple texts it to your trusted phone and you type it here.")
+        }
+    }
+
+    // MARK: Two-factor
+
+    private func challengeSection(_ challenge: TwoFactorChallenge) -> some View {
+        Group {
+            Section {
+                Text(challenge.note)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if !challenge.supportsNumberChoice {
+                    Text("Apple delivers this code to the trusted devices and phone number on the account.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
+            } header: {
+                Text("Verification required")
+            }
+
+            Section {
+                ForEach(challenge.options) { option in
+                    Button {
+                        session.selectedOptionID = option.id
+                        Task { await session.sendCode(option: option) }
+                    } label: {
+                        HStack {
+                            Image(systemName: option.kind == .sms ? "message.fill" : "iphone")
+                                .frame(width: 22)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(option.title).foregroundStyle(.primary)
+                                Text(option.detail).font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            if session.selectedOptionID == option.id {
+                                Image(systemName: "checkmark.circle.fill").foregroundStyle(.tint)
+                            }
+                        }
+                    }
+                }
+            } header: {
+                Text("Receive the code")
+            } footer: {
+                Text(session.canResend || session.codeRequestedAt == nil
+                     ? "Tap a number to have Apple send a text message."
+                     : "You can request another code in a few seconds.")
+            }
+
+            Section("Code") {
+                TextField(String(repeating: "•", count: challenge.codeLength), text: $code)
+                    .keyboardType(.numberPad)
+                    .textContentType(.oneTimeCode)
+                    .font(.system(.title3, design: .monospaced))
+                if let requested = session.codeRequestedAt {
+                    Text("Requested \(requested.formatted(date: .omitted, time: .shortened))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Button("Resend code") {
+                    Task { await session.sendCode(option: session.selectedOption) }
+                }
+                .disabled(!session.canResend || session.busy)
             }
         }
     }
 
-    private func submit() {
-        Task {
-            await session.signIn(email: email, password: password, authCode: authCode, rememberPassword: remember)
-            if session.error == nil {
-                dismiss()
-            } else if session.error?.contains("two-factor") == true {
-                needsCode = true
+    // MARK: Actions
+
+    private var actionSection: some View {
+        Section {
+            if session.busy {
+                HStack {
+                    ProgressView().controlSize(.small)
+                    Text(session.status.isEmpty ? "Working…" : session.status)
+                        .font(.caption)
+                }
+            } else if session.challenge != nil {
+                Button("Verify and sign in") {
+                    Task {
+                        await session.verifyCode(code)
+                        if session.account != nil { dismiss() }
+                    }
+                }
+                .disabled(code.trimmingCharacters(in: .whitespaces).count < 4)
+
+                Button("Start over") {
+                    code = ""
+                    session.cancelChallenge()
+                }
+            } else {
+                Button("Sign in") {
+                    Task {
+                        await session.beginSignIn(email: email, password: password, rememberPassword: remember)
+                        if session.account != nil { dismiss() }
+                    }
+                }
+                .disabled(email.isEmpty || password.isEmpty)
+            }
+        }
+    }
+}
+
+struct AnisetteSettingsView: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var session: AppStoreSession
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("https://ani.example.com", text: $session.anisetteURL)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.URL)
+                    TextField("Basic auth user (optional)", text: $session.anisetteUser)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    SecureField("Basic auth password (optional)", text: $session.anisettePassword)
+                } header: {
+                    Text("Anisette server")
+                } footer: {
+                    Text("Any anisette-v3 compatible server works: GET returns a JSON object with X-Apple-I-MD, X-Apple-I-MD-M and friends. With a provider configured the app uses Apple's native sign-in, which is what allows choosing a trusted phone number for the text message. Leave empty to use the classic App Store sign-in.")
+                }
+
+                Section {
+                    TextField("X-Apple-Widget-Key (optional)", text: $session.widgetKey)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                } header: {
+                    Text("Advanced")
+                } footer: {
+                    Text("Some Apple ID endpoints ask for a widget key. Only set this if Apple rejects the 2FA session lookup.")
+                }
+
+                Section("Device") {
+                    LabeledValue(label: "GUID", value: session.deviceGUID)
+                    LabeledValue(label: "Mode", value: session.usesAnisette ? "Native + session 2FA" : "Classic App Store sign-in")
+                }
+            }
+            .navigationTitle("Sign-in settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
             }
         }
     }

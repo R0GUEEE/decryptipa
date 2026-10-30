@@ -182,6 +182,59 @@ check(!AppStoreClient.isAllowedAuthEndpoint("https://evil.example.com/WebObjects
 check(AppStoreClient.dispatchURL("https://downloaddispatch.itunes.apple.com/ignored", "/r/redownload", guid: "AABBCCDDEEFF")?
     .hasPrefix("https://downloaddispatch.itunes.apple.com/r/redownload?guid=AABBCCDDEEFF") == true, "dispatch URL rebuilt from the bag")
 
+print("Two-factor challenge parsing")
+let idmsaJson: [String: Any] = [
+    "authType": "hsa2",
+    "noTrustedDevices": 0,
+    "trustedPhoneNumbers": [
+        ["id": 1, "numberWithDialCode": "+1 (•••) •••-1234", "obfuscatedNumber": "•••-1234", "pushMode": "sms"],
+        ["id": 2, "numberWithDialCode": "+49 (•••) •••-5678", "pushMode": "sms"]
+    ],
+    "trustedDevices": [["id": "dev1", "name": "iPhone"]],
+    "securityCode": ["length": 6]
+]
+check(TwoFactorParsing.isTwoFactor(idmsaJson), "hsa2 payload detected as 2FA")
+let challenge = TwoFactorParsing.challenge(
+    json: idmsaJson,
+    headers: ["X-Apple-ID-Session-Id": "sess", "scnt": "sc"],
+    email: "a@b.c",
+    mode: .session,
+    note: ""
+)
+check(challenge.options.count == 3, "two phone numbers + trusted device = 3 options")
+check(challenge.options.filter { $0.kind == .sms }.count == 2, "both numbers are SMS options")
+check(challenge.preferredOption?.kind == .sms, "SMS preferred over trusted device")
+check(challenge.preferredOption?.phoneID == 1, "first phone number keeps its id")
+check(challenge.codeLength == 6, "code length read from securityCode")
+check(challenge.sessionID == "sess" && challenge.scnt == "sc", "session headers captured")
+check(challenge.supportsNumberChoice, "session mode reports number choice")
+
+let minimal: [String: Any] = ["authType": "hsa2"]
+let minimalChallenge = TwoFactorParsing.challenge(json: minimal, headers: [:], email: "x", mode: .session, note: "")
+check(minimalChallenge.options == [.device], "no numbers still offers the trusted device")
+check(minimalChallenge.supportsNumberChoice == false, "no number choice without phone data")
+
+let stringIDs: [String: Any] = ["trustedPhoneNumbers": [["id": "7", "numberWithDialCode": "+44 1234"]]]
+let stringChallenge = TwoFactorParsing.challenge(json: stringIDs, headers: [:], email: "x", mode: .legacy, note: "")
+check(stringChallenge.options.first?.phoneID == 7, "string phone ids coerced")
+check(stringChallenge.mode == .legacy, "legacy mode preserved")
+check(TwoFactorParsing.isTwoFactor(["failureType": "hsa2"]), "failureType hsa2 detected")
+check(TwoFactorParsing.isTwoFactor(["customerMessage": "Enter your two-factor code"]), "message-based detection")
+check(!TwoFactorParsing.isTwoFactor(["dsPersonId": "1", "passwordToken": "t"]), "successful payload is not 2FA")
+
+print("Anisette header handling")
+let local = AnisetteHeaders.local(guid: "AABBCCDDEEFF")
+check(local.values["X-Mme-Device-Id"] == "AABBCCDDEEFF", "local headers carry the device GUID")
+check(local.values["X-Apple-I-MD"] == nil, "local headers carry no attestation")
+let serverJSON = Data(#"{"X-Apple-I-MD":"abc","X-Apple-I-MD-M":"machine","X-Apple-I-MD-RINFO":17106176}"#.utf8)
+if let parsed = try? AnisetteHeaders.fromServer(serverJSON) {
+    check(parsed.values["X-Apple-I-MD"] == "abc", "server OTP parsed")
+    check(parsed.values["X-Apple-I-MD-RINFO"] == "17106176", "numeric routing info stringified")
+} else {
+    check(false, "server anisette JSON parsed")
+}
+check((try? AnisetteHeaders.fromServer(Data("{}".utf8))) == nil, "missing OTP rejected")
+
 print("")
 if failures == 0 {
     print("all checks passed")

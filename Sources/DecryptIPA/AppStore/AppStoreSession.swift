@@ -1,34 +1,63 @@
 import Foundation
 import Combine
 
-/// Account + download state for the App Store flow. Everything that survives a
-/// relaunch lives in the keychain (session token, optional password) or
-/// UserDefaults (device GUID, storefront country).
+/// Account + download state for the App Store flow, including the Apple ID
+/// sign-in / two-factor state machine.
+///
+/// Two 2FA modes exist and both end in the same place:
+///  * `.session` — native auth handed back an `appleauth` session, so the user
+///    can pick a trusted phone number and have Apple text it.
+///  * `.legacy`  — the MZFinance endpoint only says "code required"; Apple
+///    already texted the trusted phone, and the code is submitted with the
+///    password.
 @MainActor
 final class AppStoreSession: ObservableObject {
+    // Account / app
     @Published private(set) var account: AppStoreAccount?
     @Published private(set) var app: AppStoreApp?
     @Published private(set) var downloadedIPA: URL?
     @Published private(set) var ticket: AppStoreTicket?
+
+    // Sign-in state
+    @Published private(set) var challenge: TwoFactorChallenge?
+    @Published private(set) var selectedOptionID: String?
+    @Published private(set) var codeRequestedAt: Date?
+    @Published private(set) var waitingForCode = false
+
+    // Job state
     @Published private(set) var busy = false
     @Published private(set) var status: String = ""
     @Published private(set) var error: String?
     @Published private(set) var downloadProgress: Double = 0
     @Published private(set) var log: [LogEntry] = []
 
-    @Published var country: String {
-        didSet { defaults.set(country, forKey: Self.countryKey) }
+    // Settings
+    @Published var country: String { didSet { defaults.set(country, forKey: Self.countryKey) } }
+    @Published var anisetteURL: String { didSet { defaults.set(anisetteURL, forKey: Self.anisetteKey) } }
+    @Published var anisetteUser: String { didSet { defaults.set(anisetteUser, forKey: Self.anisetteUserKey) } }
+    @Published var widgetKey: String { didSet { defaults.set(widgetKey, forKey: Self.widgetKeyKey) } }
+    @Published var anisettePassword: String {
+        didSet { Keychain.save(Data(anisettePassword.utf8), account: Self.anisettePasswordKey) }
     }
 
     private static let accountKey = "appstore.account"
     private static let passwordKey = "appstore.password"
     private static let guidKey = "appstore.guid"
     private static let countryKey = "appstore.country"
+    private static let anisetteKey = "appstore.anisette.url"
+    private static let anisetteUserKey = "appstore.anisette.user"
+    private static let anisettePasswordKey = "appstore.anisette.password"
+    private static let widgetKeyKey = "appstore.widgetkey"
 
     private let guid: String
     private let defaults = UserDefaults.standard
     private let client: AppStoreClient
     private let outputDirectory: URL
+
+    // Pending credentials for the 2FA round trip (memory only).
+    private var pendingEmail = ""
+    private var pendingPassword = ""
+    private var pendingRemember = false
 
     static let countries: [(code: String, name: String)] = [
         ("us", "United States"), ("gb", "United Kingdom"), ("ca", "Canada"),
@@ -55,6 +84,12 @@ final class AppStoreSession: ObservableObject {
         self.guid = guid
 
         self.country = defaults.string(forKey: Self.countryKey) ?? "us"
+        self.anisetteURL = defaults.string(forKey: Self.anisetteKey) ?? ""
+        self.anisetteUser = defaults.string(forKey: Self.anisetteUserKey) ?? ""
+        self.widgetKey = defaults.string(forKey: Self.widgetKeyKey) ?? ""
+        self.anisettePassword = Keychain.load(account: Self.anisettePasswordKey)
+            .flatMap { String(data: $0, encoding: .utf8) } ?? ""
+
         self.client = AppStoreClient(guid: guid)
 
         if let data = Keychain.load(account: Self.accountKey),
@@ -65,8 +100,8 @@ final class AppStoreSession: ObservableObject {
     }
 
     var deviceGUID: String { guid }
-
     var isSignedIn: Bool { account != nil }
+    var usesAnisette: Bool { !anisetteURL.trimmingCharacters(in: .whitespaces).isEmpty }
 
     var savedPassword: String {
         guard let data = Keychain.load(account: Self.passwordKey),
@@ -74,37 +109,196 @@ final class AppStoreSession: ObservableObject {
         return text
     }
 
-    // MARK: Account
+    var selectedOption: TwoFactorOption? {
+        guard let challenge else { return nil }
+        if let selectedOptionID, let match = challenge.options.first(where: { $0.id == selectedOptionID }) {
+            return match
+        }
+        return challenge.preferredOption
+    }
 
-    func signIn(email: String, password: String, authCode: String, rememberPassword: Bool) async {
+    var canResend: Bool {
+        guard let codeRequestedAt else { return true }
+        return Date().timeIntervalSince(codeRequestedAt) > 30
+    }
+
+    // MARK: - Sign-in
+
+    func beginSignIn(email: String, password: String, rememberPassword: Bool) async {
         busy = true
         error = nil
+        challenge = nil
+        selectedOptionID = nil
+        codeRequestedAt = nil
+        waitingForCode = false
         status = "Signing in to the App Store…"
         defer { busy = false }
 
-        do {
-            let account = try await client.signIn(
-                email: email.trimmingCharacters(in: .whitespacesAndNewlines),
-                password: password,
-                authCode: authCode.trimmingCharacters(in: .whitespaces),
-                country: country
-            )
-            self.account = account
-            persist(account)
+        pendingEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        pendingPassword = password
+        pendingRemember = rememberPassword
 
-            if rememberPassword {
-                Keychain.save(Data(password.utf8), account: Self.passwordKey)
+        let anisette = await anisetteHeaders()
+        append(anisette == nil ? "Using the legacy App Store sign-in path (no anisette provider configured)."
+                               : "Using native App Store sign-in with anisette attestation.", .debug)
+
+        do {
+            let outcome = try await client.beginSignIn(
+                email: pendingEmail,
+                password: password,
+                country: country,
+                anisette: anisette,
+                widgetKey: widgetKey
+            )
+
+            switch outcome {
+            case .signedIn(let account):
+                finishSignIn(account)
+            case .challenge(let challenge):
+                self.challenge = challenge
+                self.selectedOptionID = challenge.preferredOption?.id
+                status = "Two-factor authentication required"
+
+                if let note = client.lastNativeFailure, !note.isEmpty {
+                    append(note, .warn)
+                }
+                append(challenge.note, .warn)
+
+                if challenge.mode == .legacy {
+                    // The refused attempt already made Apple text the trusted
+                    // phone; treat it as "code sent".
+                    codeRequestedAt = Date()
+                    waitingForCode = true
+                }
+            }
+        } catch {
+            fail(error)
+        }
+    }
+
+    /// Asks Apple to deliver a code through the selected channel.
+    func sendCode(option: TwoFactorOption? = nil) async {
+        guard let challenge else { return }
+        let option = option ?? selectedOption ?? challenge.preferredOption
+        guard let option else {
+            error = "Apple did not offer a delivery method for this code."
+            return
+        }
+
+        busy = true
+        error = nil
+        defer { busy = false }
+
+        selectedOptionID = option.id
+
+        do {
+            if challenge.mode == .session {
+                guard let anisette = await anisetteHeaders() else {
+                    throw AppError.message("Session-based 2FA needs anisette attestation. Configure a provider in Advanced, or use the trusted-device code Apple already sent.")
+                }
+
+                try await client.requestCode(
+                    challenge,
+                    option: option,
+                    anisette: anisette,
+                    widgetKey: widgetKey
+                )
+                append("Asked Apple for a \(option.kind == .sms ? "text message" : "trusted-device prompt") → \(option.title)", .command)
             } else {
-                Keychain.delete(account: Self.passwordKey)
+                // Legacy: re-running the refused sign-in makes Apple re-send the code.
+                do {
+                    _ = try await client.signIn(
+                        email: pendingEmail,
+                        password: pendingPassword,
+                        authCode: "",
+                        country: country
+                    )
+                } catch AppStoreError.authCodeRequired {
+                    append("Apple re-sent the verification code.", .info)
+                }
             }
 
-            status = "Signed in as \(account.summary)"
-            append(status, .success)
+            codeRequestedAt = Date()
+            waitingForCode = true
+            status = option.kind == .sms
+                ? "Code sent by text to \(option.title)"
+                : "Code requested from your trusted devices"
         } catch {
-            self.error = (error as? LocalizedError)?.errorDescription ?? "\(error)"
-            status = ""
-            append(self.error ?? "sign-in failed", .error)
+            fail(error)
         }
+    }
+
+    func verifyCode(_ code: String) async {
+        guard let challenge else { return }
+        let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 4 else {
+            error = "Enter the \(challenge.codeLength)-digit code Apple sent."
+            return
+        }
+
+        busy = true
+        error = nil
+        defer { busy = false }
+
+        do {
+            let account: AppStoreAccount
+
+            switch challenge.mode {
+            case .legacy:
+                account = try await client.signIn(
+                    email: pendingEmail,
+                    password: pendingPassword,
+                    authCode: trimmed,
+                    country: country
+                )
+
+            case .session:
+                guard let anisette = await anisetteHeaders(), let option = selectedOption else {
+                    throw AppError.message("The 2FA session expired. Sign in again.")
+                }
+
+                account = try await client.completeSessionChallenge(
+                    challenge,
+                    option: option,
+                    code: trimmed,
+                    password: pendingPassword,
+                    anisette: anisette,
+                    widgetKey: widgetKey
+                )
+            }
+
+            finishSignIn(account)
+        } catch {
+            fail(error)
+        }
+    }
+
+    func cancelChallenge() {
+        challenge = nil
+        selectedOptionID = nil
+        codeRequestedAt = nil
+        waitingForCode = false
+        pendingPassword = ""
+        status = ""
+    }
+
+    private func finishSignIn(_ account: AppStoreAccount) {
+        self.account = account
+        challenge = nil
+        waitingForCode = false
+        pendingPassword = ""
+
+        if let data = try? JSONEncoder().encode(account) {
+            Keychain.save(data, account: Self.accountKey)
+        }
+        if pendingRemember {
+            Keychain.save(Data(pendingPassword.utf8), account: Self.passwordKey)
+        } else if !savedPassword.isEmpty {
+            Keychain.delete(account: Self.passwordKey)
+        }
+
+        status = "Signed in as \(account.summary)"
+        append(status, .success)
     }
 
     func signOut() {
@@ -112,26 +306,36 @@ final class AppStoreSession: ObservableObject {
         app = nil
         ticket = nil
         downloadedIPA = nil
+        cancelChallenge()
         Keychain.delete(account: Self.accountKey)
         status = "Signed out"
     }
 
-    func reauthenticate() async {
-        let email = account?.email ?? ""
-        let password = savedPassword
-        guard !email.isEmpty, !password.isEmpty else {
-            error = "Sign in again — the App Store session expired."
-            return
+    // MARK: - Anisette
+
+    private func anisetteHeaders() async -> AnisetteHeaders? {
+        guard usesAnisette else { return nil }
+        let provider = AnisetteProvider(
+            endpoint: anisetteURL,
+            username: anisetteUser,
+            password: anisettePassword,
+            guid: guid
+        )
+        do {
+            let headers = try await provider.headers()
+            var values = headers.values
+            for (key, value) in AnisetteHeaders.local(guid: guid).values where values[key] == nil {
+                values[key] = value
+            }
+            append("Anisette: X-Apple-I-MD \(values["X-Apple-I-MD"]?.count ?? 0) chars.", .debug)
+            return AnisetteHeaders(values: values)
+        } catch {
+            append((error as? LocalizedError)?.errorDescription ?? "\(error)", .error)
+            return nil
         }
-        await signIn(email: email, password: password, authCode: "", rememberPassword: true)
     }
 
-    private func persist(_ account: AppStoreAccount) {
-        guard let data = try? JSONEncoder().encode(account) else { return }
-        Keychain.save(data, account: Self.accountKey)
-    }
-
-    // MARK: Lookup
+    // MARK: - Lookup
 
     func lookUp(_ identifier: String) async {
         busy = true
@@ -140,7 +344,6 @@ final class AppStoreSession: ObservableObject {
         ticket = nil
         downloadedIPA = nil
         downloadProgress = 0
-
         defer { busy = false }
 
         guard let parsed = AppStoreIdentifier.parse(identifier) else {
@@ -154,21 +357,13 @@ final class AppStoreSession: ObservableObject {
             self.app = app
             status = "\(app.name) · \(app.bundleID) · \(app.version)"
             append(status, .success)
-
-            if let account, !account.storeFront.isEmpty {
-                append("Account storefront header: \(account.storeFront)", .debug)
-            }
         } catch {
-            self.error = (error as? LocalizedError)?.errorDescription ?? "\(error)"
-            status = ""
+            fail(error, keepStatus: false)
         }
     }
 
-    // MARK: Download
+    // MARK: - Download
 
-    /// Full path for an identifier: resolve → licence (free apps) → ticket →
-    /// bytes. Writes into Documents/Imports so the existing pipeline can install
-    /// and decrypt it.
     func download() async {
         guard let app else {
             error = "Look up an app first."
@@ -195,13 +390,13 @@ final class AppStoreSession: ObservableObject {
                 Task { @MainActor in self?.append(note, .warn) }
             }
             self.ticket = ticket
-            append("Ticket: \(ticket.bundleID) \(ticket.version) · \(ticket.sinfs) sinf(s) · \(ticket.url.host ?? "?")", .info)
+            append("Ticket: \(ticket.bundleID) \(ticket.version) · \(ticket.sinfs) sinf(s)", .info)
 
             let safeName = "\(app.bundleID)_\(ticket.version.isEmpty ? app.version : ticket.version).ipa"
                 .replacingOccurrences(of: "/", with: "-")
             let destination = outputDirectory.appendingPathComponent(safeName)
 
-            status = "Downloading \(ticket.fileSize > 0 ? ByteCountFormatter.string(fromByteCount: ticket.fileSize, countStyle: .file) : "IPA")…"
+            status = "Downloading…"
             append(status, .command)
 
             try await client.download(ticket, to: destination) { [weak self] written, total in
@@ -218,23 +413,15 @@ final class AppStoreSession: ObservableObject {
             status = "Downloaded \(destination.lastPathComponent)"
             append(status, .success)
 
-            // Sanity check: the download must actually be an IPA with a Payload.
             if let metadata = try? IPATool.metadata(for: destination) {
                 append("IPA contains \(metadata.bundleID) \(metadata.version) (minOS \(metadata.minimumOS)).", .info)
             } else {
                 append("Warning: the download does not look like a standard IPA.", .warn)
             }
-        } catch let appError as AppStoreError {
-            self.error = appError.errorDescription
-            status = ""
-            append(self.error ?? "download failed", .error)
-            if case .signIn(let message) = appError, message.contains("session expired") {
-                append("Use \"Sign in again\" to refresh the password token.", .warn)
-            }
+        } catch AppStoreError.signIn(let message) where message.contains("session expired") {
+            fail(AppStoreError.signIn(message))
         } catch {
-            self.error = (error as? LocalizedError)?.errorDescription ?? "\(error)"
-            status = ""
-            append(self.error ?? "download failed", .error)
+            fail(error)
         }
     }
 
@@ -242,6 +429,15 @@ final class AppStoreSession: ObservableObject {
         downloadedIPA = nil
         ticket = nil
         downloadProgress = 0
+    }
+
+    // MARK: - Helpers
+
+    private func fail(_ error: Error, keepStatus: Bool = false) {
+        let message = (error as? LocalizedError)?.errorDescription ?? "\(error)"
+        self.error = message
+        if !keepStatus { status = "" }
+        append(message, .error)
     }
 
     private func append(_ text: String, _ level: LogLevel = .info) {

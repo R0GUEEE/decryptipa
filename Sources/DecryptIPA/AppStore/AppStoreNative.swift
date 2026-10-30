@@ -1,0 +1,226 @@
+import Foundation
+
+enum SignInOutcome {
+    case signedIn(AppStoreAccount)
+    case challenge(TwoFactorChallenge)
+}
+
+/// Native App Store authentication (`auth/v1/native/fast`), used when an
+/// anisette provider is configured. It is the only path that can ask Apple to
+/// text a *specific* trusted number, because it hands back an `appleauth`
+/// session (`X-Apple-ID-Session-Id` + `scnt`) when 2FA is required.
+extension AppStoreClient {
+    static let nativeAuthURL = "https://auth.itunes.apple.com/auth/v1/native/fast/"
+
+    /// Chooses the strongest available path: native + session 2FA when anisette
+    /// is configured, otherwise the legacy MZFinance password+code flow.
+    func beginSignIn(
+        email: String,
+        password: String,
+        country: String,
+        anisette: AnisetteHeaders?,
+        widgetKey: String
+    ) async throws -> SignInOutcome {
+        if let anisette {
+            do {
+                return try await nativeSignIn(
+                    email: email,
+                    password: password,
+                    country: country,
+                    anisette: anisette,
+                    widgetKey: widgetKey
+                )
+            } catch let error as AppError {
+                // Native auth fails closed on unattested providers; the legacy
+                // endpoint still works for most accounts, so fall through.
+                lastNativeFailure = error.errorDescription ?? "native auth failed"
+            }
+        }
+
+        let account = try await signIn(email: email, password: password, authCode: "", country: country)
+        return .signedIn(account)
+    }
+
+    func nativeSignIn(
+        email: String,
+        password: String,
+        country: String,
+        anisette: AnisetteHeaders,
+        widgetKey: String
+    ) async throws -> SignInOutcome {
+        var request = URLRequest(url: URL(string: Self.nativeAuthURL)!)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue(AnisetteProvider.userAgent, forHTTPHeaderField: "User-Agent")
+        anisette.apply(to: &request)
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "appleId": email,
+            "password": password,
+            "attempt": "1",
+            "createSession": "true",
+            "guid": guid,
+            "rmp": "0",
+            "why": "signIn"
+        ])
+
+        let (data, response) = try await http.send(request)
+        let json = TwoFactorParsing.jsonDictionary(data)
+        let headers = Self.headerDictionary(response)
+
+        let failureType = TwoFactorParsing.stringValue(json["failureType"]) ?? ""
+        let message = TwoFactorParsing.stringValue(json["customerMessage"]) ?? ""
+
+        // 2FA required: Apple returns a session and (usually) the trusted phone
+        // numbers we can pick from.
+        if response.statusCode == 401 || response.statusCode == 403 || !failureType.isEmpty || TwoFactorParsing.isTwoFactor(json) {
+            if TwoFactorParsing.isTwoFactor(json) || headers["X-Apple-ID-Session-Id"] != nil {
+                var challenge = TwoFactorParsing.challenge(
+                    json: json,
+                    headers: headers,
+                    email: email,
+                    mode: .session,
+                    note: ""
+                )
+
+                if let sessionID = challenge.sessionID, let scnt = challenge.scnt {
+                    let client = AppleIDTwoFactor(
+                        anisette: anisette,
+                        widgetKey: widgetKey,
+                        clientID: Self.widgetClientID
+                    )
+                    if let richer = try? await client.sessionState(email: email, sessionID: sessionID, scnt: scnt),
+                       !richer.options.isEmpty {
+                        challenge = TwoFactorChallenge(
+                            mode: .session,
+                            email: email,
+                            sessionID: sessionID,
+                            scnt: scnt,
+                            options: richer.options,
+                            codeLength: richer.codeLength,
+                            note: challenge.note
+                        )
+                    }
+                }
+
+                return .challenge(challenge)
+            }
+
+            throw AppStoreError.signIn(message.isEmpty
+                ? "Apple rejected the native sign-in (HTTP \(response.statusCode)): \(AppStorePlist.snippet(data))"
+                : message)
+        }
+
+        guard response.statusCode == 200 else {
+            throw AppStoreError.signIn("Native sign-in failed (HTTP \(response.statusCode)): \(AppStorePlist.snippet(data))")
+        }
+
+        let dsid = TwoFactorParsing.stringValue(json["dsPersonId"]) ?? ""
+        let token = TwoFactorParsing.stringValue(json["passwordToken"]) ?? ""
+        guard !dsid.isEmpty, !token.isEmpty else {
+            throw AppStoreError.signIn("Apple answered without a token — the account may need to accept new terms in the App Store.")
+        }
+
+        let accountInfo = json["accountInfo"] as? [String: Any] ?? [:]
+        let address = accountInfo["address"] as? [String: Any] ?? [:]
+
+        let account = AppStoreAccount(
+            email: TwoFactorParsing.stringValue(accountInfo["appleId"]) ?? email,
+            passwordToken: token,
+            directoryServicesID: dsid,
+            storeFront: headers["X-Set-Apple-Store-Front"]
+                ?? TwoFactorParsing.stringValue(json["storefront"])
+                ?? "",
+            pod: headers["pod"] ?? "",
+            name: "\(TwoFactorParsing.stringValue(address["firstName"]) ?? "") \(TwoFactorParsing.stringValue(address["lastName"]) ?? "")"
+                .trimmingCharacters(in: .whitespaces),
+            country: country.lowercased()
+        )
+
+        guard !account.storeFront.isEmpty else {
+            throw AppStoreError.signIn("Signed in, but Apple returned no storefront header.")
+        }
+
+        adopt(account)
+        return .signedIn(account)
+    }
+
+    /// Completes a session-mode challenge: verify the code against the chosen
+    /// delivery option, then re-run native auth to collect the token.
+    func completeSessionChallenge(
+        _ challenge: TwoFactorChallenge,
+        option: TwoFactorOption,
+        code: String,
+        password: String,
+        anisette: AnisetteHeaders,
+        widgetKey: String
+    ) async throws -> AppStoreAccount {
+        guard let sessionID = challenge.sessionID, let scnt = challenge.scnt else {
+            throw AppStoreError.signIn("Apple did not return a 2FA session identifier; sign in again.")
+        }
+
+        let client = AppleIDTwoFactor(anisette: anisette, widgetKey: widgetKey, clientID: Self.widgetClientID)
+
+        switch option.kind {
+        case .sms:
+            guard let phoneID = option.phoneID else {
+                throw AppStoreError.signIn("Apple did not give an id for that phone number; pick another option.")
+            }
+            try await client.verifyText(code: code, phoneID: phoneID, sessionID: sessionID, scnt: scnt)
+        case .trustedDevice:
+            try await client.verifyTrustedDevice(code: code, sessionID: sessionID, scnt: scnt)
+        }
+
+        // The 2FA cookie is now in the shared cookie store; native auth should
+        // return the token instead of another challenge.
+        let outcome = try await nativeSignIn(
+            email: challenge.email,
+            password: password,
+            country: account?.country ?? "us",
+            anisette: anisette,
+            widgetKey: widgetKey
+        )
+
+        switch outcome {
+        case .signedIn(let account):
+            return account
+        case .challenge:
+            throw AppStoreError.signIn("Apple asked for a code again after verification. Try signing in once more.")
+        }
+    }
+
+    /// Asks Apple to deliver a code for the selected option.
+    func requestCode(
+        _ challenge: TwoFactorChallenge,
+        option: TwoFactorOption,
+        anisette: AnisetteHeaders,
+        widgetKey: String
+    ) async throws {
+        guard challenge.mode == .session, let sessionID = challenge.sessionID, let scnt = challenge.scnt else {
+            throw AppStoreError.signIn("This sign-in needs a code typed from the device Apple notified.")
+        }
+
+        let client = AppleIDTwoFactor(anisette: anisette, widgetKey: widgetKey, clientID: Self.widgetClientID)
+
+        switch option.kind {
+        case .sms:
+            guard let phoneID = option.phoneID else {
+                throw AppStoreError.signIn("Apple did not give an id for that phone number.")
+            }
+            try await client.sendText(to: phoneID, sessionID: sessionID, scnt: scnt)
+        case .trustedDevice:
+            try await client.promptTrustedDevice(sessionID: sessionID, scnt: scnt)
+        }
+    }
+
+    static func headerDictionary(_ response: HTTPURLResponse) -> [String: String] {
+        var headers: [String: String] = [:]
+        for (key, value) in response.allHeaderFields {
+            headers["\(key)"] = "\(value)"
+        }
+        return headers
+    }
+
+    static let widgetClientID = ""
+}
+
