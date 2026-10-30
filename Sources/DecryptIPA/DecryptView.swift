@@ -36,9 +36,9 @@ struct DecryptView: View {
     @State private var showingAppStore = false
     @State private var showingDiagnostics = false
 
-    private let ink = Color(red: 0.12, green: 0.17, blue: 0.24)
-    private let canvas = Color(red: 0.95, green: 0.96, blue: 0.98)
-    private let accent = Color(red: 0.21, green: 0.42, blue: 0.85)
+    private let ink = Color(red: 0.92, green: 0.94, blue: 0.98)
+    private let canvas = Color(red: 0.055, green: 0.065, blue: 0.085)
+    private let accent = Color(red: 0.38, green: 0.58, blue: 1.0)
 
     var body: some View {
         NavigationStack {
@@ -132,7 +132,7 @@ struct DecryptView: View {
                 if phase == .done { library.refresh() }
             }
         }
-        .preferredColorScheme(.light)
+        .preferredColorScheme(.dark)
     }
 
     // MARK: Header
@@ -594,10 +594,10 @@ private struct EmptyHint: View {
 private extension View {
     func cardSurface() -> some View {
         self
-            .background(Color.white, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .background(Color(red: 0.105, green: 0.12, blue: 0.15), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(0.035), lineWidth: 1)
+                    .strokeBorder(Color.white.opacity(0.06), lineWidth: 1)
             }
     }
 }
