@@ -189,4 +189,4 @@ enum AppError: LocalizedError {
     }
 }
 
-func err(_ text: String) -> AppError { .message(text) }
+func appFailure(_ text: String) -> AppError { .message(text) }

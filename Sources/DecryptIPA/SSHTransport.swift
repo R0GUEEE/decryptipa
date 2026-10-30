@@ -51,20 +51,20 @@ final class SSHTransport: @unchecked Sendable {
         switch profile.auth {
         case .password:
             guard !secrets.password.isEmpty else {
-                throw err("Enter the SSH password for \(profile.endpoint).")
+                throw appFailure("Enter the SSH password for \(profile.endpoint).")
             }
             auth = .passwordBased(username: profile.username, password: secrets.password)
 
         case .ed25519:
             guard !secrets.privateKey.isEmpty else {
-                throw err("Paste an unencrypted or passphrase-protected OpenSSH ed25519 private key.")
+                throw appFailure("Paste an unencrypted or passphrase-protected OpenSSH ed25519 private key.")
             }
             let key: Curve25519.Signing.PrivateKey
             do {
                 let passphrase = secrets.keyPassphrase.isEmpty ? nil : Data(secrets.keyPassphrase.utf8)
                 key = try Curve25519.Signing.PrivateKey(sshEd25519: secrets.privateKey, decryptionKey: passphrase)
             } catch {
-                throw err("The private key could not be parsed (only OpenSSH ed25519 keys are supported): \(error)")
+                throw appFailure("The private key could not be parsed (only OpenSSH ed25519 keys are supported): \(error)")
             }
             auth = .ed25519(username: profile.username, privateKey: key)
         }
@@ -80,7 +80,7 @@ final class SSHTransport: @unchecked Sendable {
                 connectTimeout: .seconds(25)
             )
         } catch {
-            throw err("SSH connect to \(profile.endpoint) failed: \(error)")
+            throw appFailure("SSH connect to \(profile.endpoint) failed: \(error)")
         }
 
         var sudoPath: String?
@@ -94,7 +94,7 @@ final class SSHTransport: @unchecked Sendable {
                 sudoPath = remote
             } catch {
                 try? await client.close()
-                throw err("Could not stage the sudo password on the device: \(error)")
+                throw appFailure("Could not stage the sudo password on the device: \(error)")
             }
         }
 
@@ -154,7 +154,7 @@ final class SSHTransport: @unchecked Sendable {
                 exitCode: Int32(failure.exitCode)
             )
         } catch {
-            throw err("Command failed: \(error)")
+            throw appFailure("Command failed: \(error)")
         }
     }
 
@@ -189,10 +189,10 @@ final class SSHTransport: @unchecked Sendable {
             }
         } catch let failure as SSHClient.CommandFailed {
             flushCarry(&carry, onStderrLine)
-            throw err("The on-device helper exited with status \(failure.exitCode).")
+            throw appFailure("The on-device helper exited with status \(failure.exitCode).")
         } catch {
             flushCarry(&carry, onStderrLine)
-            throw err("Decrypt stream failed: \(error)")
+            throw appFailure("Decrypt stream failed: \(error)")
         }
 
         flushCarry(&carry, onStderrLine)

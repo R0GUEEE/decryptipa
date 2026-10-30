@@ -97,7 +97,7 @@ enum AppStoreLookup {
             } else {
                 guard url.path.contains("/app/"),
                       let last = url.path.split(separator: "/").last else {
-                    throw err("That link does not contain an App Store app id.")
+                    throw appFailure("That link does not contain an App Store app id.")
                 }
                 items.append(URLQueryItem(name: "id", value: String(last)))
             }
@@ -111,16 +111,16 @@ enum AppStoreLookup {
 
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-            throw err("iTunes lookup failed (HTTP \((response as? HTTPURLResponse)?.statusCode ?? -1)).")
+            throw appFailure("iTunes lookup failed (HTTP \((response as? HTTPURLResponse)?.statusCode ?? -1)).")
         }
 
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let results = root["results"] as? [[String: Any]] else {
-            throw err("iTunes lookup returned an unreadable response.")
+            throw appFailure("iTunes lookup returned an unreadable response.")
         }
 
         guard let first = results.first else {
-            throw err("No App Store result for \(identifier.display) in the \(country.uppercased()) storefront.")
+            throw appFailure("No App Store result for \(identifier.display) in the \(country.uppercased()) storefront.")
         }
 
         return AppStoreApp(

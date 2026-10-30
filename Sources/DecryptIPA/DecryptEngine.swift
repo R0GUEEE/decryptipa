@@ -192,7 +192,7 @@ final class DecryptEngine: ObservableObject {
 
         let bundleID = metadata?.bundleID ?? request.bundleIDOverride ?? ""
         guard !bundleID.isEmpty else {
-            throw err("No bundle identifier available — pick an IPA or type the installed app's bundle id.")
+            throw appFailure("No bundle identifier available — pick an IPA or type the installed app's bundle id.")
         }
 
         try Task.checkCancellation()
@@ -223,7 +223,7 @@ final class DecryptEngine: ObservableObject {
 
             if mustInstall {
                 guard let appinst, let ipa = request.inputIPA ?? metadataSourceURL(request) else {
-                    throw err("appinst is required to install the bundle: install AppSync Unified + appinst on the device.")
+                    throw appFailure("appinst is required to install the bundle: install AppSync Unified + appinst on the device.")
                 }
 
                 var uploadURL = ipa
@@ -273,7 +273,7 @@ final class DecryptEngine: ObservableObject {
 
                 installed = try await service.findInstalled(bundleID: bundleID)
                 guard let installed else {
-                    throw err("Bundle \(bundleID) is not present after appinst succeeded.")
+                    throw appFailure("Bundle \(bundleID) is not present after appinst succeeded.")
                 }
                 append("Installed bundle: \(installed.bundlePath)", .success)
             } else {
@@ -282,7 +282,7 @@ final class DecryptEngine: ObservableObject {
         }
 
         guard let bundlePath = installed?.bundlePath else {
-            throw err("Bundle \(bundleID) is not installed on the device and no IPA was supplied to install it.")
+            throw appFailure("Bundle \(bundleID) is not installed on the device and no IPA was supplied to install it.")
         }
 
         try Task.checkCancellation()
@@ -296,7 +296,7 @@ final class DecryptEngine: ObservableObject {
         let partialURL = request.outputDirectory.appendingPathComponent(".partial-\(UUID().uuidString).ipa")
 
         guard let sink = FileSink(url: partialURL) else {
-            throw err("Could not open \(partialURL.lastPathComponent) for writing.")
+            throw appFailure("Could not open \(partialURL.lastPathComponent) for writing.")
         }
 
         var lastReported: Int64 = 0
@@ -333,12 +333,12 @@ final class DecryptEngine: ObservableObject {
 
         if let failure = sink.failure {
             try? FileManager.default.removeItem(at: partialURL)
-            throw err("Writing the IPA failed: \(failure)")
+            throw appFailure("Writing the IPA failed: \(failure)")
         }
 
         guard sink.bytes > 0 else {
             try? FileManager.default.removeItem(at: partialURL)
-            throw err("The helper produced no IPA bytes — check the device log above.")
+            throw appFailure("The helper produced no IPA bytes — check the device log above.")
         }
 
         append("Received \(ByteCountFormatter.string(fromByteCount: sink.bytes, countStyle: .file)) · \(imagesDone) image(s) decrypted\(imagesFailed > 0 ? ", \(imagesFailed) failed" : "")", .success)

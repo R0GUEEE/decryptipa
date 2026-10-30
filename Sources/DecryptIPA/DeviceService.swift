@@ -23,7 +23,7 @@ final class DeviceService {
 
         let result = try await transport.run(script)
         guard result.ok else {
-            throw err("Device probe failed (exit \(result.exitCode)): \(result.stderr)")
+            throw appFailure("Device probe failed (exit \(result.exitCode)): \(result.stderr)")
         }
 
         let lines = result.stdout.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
@@ -117,7 +117,7 @@ final class DeviceService {
         try await transport.createDirectories(SSHTransport.helpersDir)
         try await transport.uploadData(data, to: remote, mode: 0o755)
         guard await transport.exists(remote) else {
-            throw err("Helper upload failed: \(remote) is not present after upload.")
+            throw appFailure("Helper upload failed: \(remote) is not present after upload.")
         }
         return remote
     }
@@ -170,11 +170,11 @@ final class DeviceService {
     func readPlist(_ path: String) async throws -> [String: Any] {
         let result = try await transport.runPrivileged("cat \(shellQuote(path))")
         guard result.ok, let payload = result.stdout.data(using: .utf8) else {
-            throw err("Could not read \(path) (exit \(result.exitCode))")
+            throw appFailure("Could not read \(path) (exit \(result.exitCode))")
         }
         guard let plist = try? PropertyListSerialization.propertyList(from: payload, options: [], format: nil),
               let dictionary = plist as? [String: Any] else {
-            throw err("Could not parse \(path) as a property list.")
+            throw appFailure("Could not parse \(path) as a property list.")
         }
         return dictionary
     }
@@ -184,20 +184,20 @@ final class DeviceService {
     func install(appinst: String, ipaRemote: String) async throws {
         let result = try await transport.runPrivileged("\(shellQuote(appinst)) \(shellQuote(ipaRemote))")
         guard result.ok else {
-            throw err("appinst failed (exit \(result.exitCode)): \(result.combined.suffix(800))")
+            throw appFailure("appinst failed (exit \(result.exitCode)): \(result.combined.suffix(800))")
         }
     }
 
     func uninstall(bundlePath: String) async throws {
         let root = "/var/containers/Bundle/Application/"
         guard bundlePath.hasPrefix(root) else {
-            throw err("Refusing to uninstall a bundle outside \(root): \(bundlePath)")
+            throw appFailure("Refusing to uninstall a bundle outside \(root): \(bundlePath)")
         }
         let uuidDirectory = (bundlePath as NSString).deletingLastPathComponent
         let script = "uicache -u \(shellQuote(bundlePath)) && rm -rf \(shellQuote(uuidDirectory))"
         let result = try await transport.runPrivileged(script)
         guard result.ok else {
-            throw err("Uninstall failed (exit \(result.exitCode)): \(result.combined.suffix(400))")
+            throw appFailure("Uninstall failed (exit \(result.exitCode)): \(result.combined.suffix(400))")
         }
     }
 
@@ -249,7 +249,7 @@ enum HelperBinary {
             Bundle.main.url(forResource: "ipadecrypt-helper-arm64", withExtension: nil, subdirectory: "Resources")
         ]
         guard let url = candidates.compactMap({ $0 }).first else {
-            throw err("The bundled ipadecrypt helper is missing from the app.")
+            throw appFailure("The bundled ipadecrypt helper is missing from the app.")
         }
         return try Data(contentsOf: url)
     }

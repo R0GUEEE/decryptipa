@@ -7,7 +7,7 @@ enum IPATool {
     /// Reads the app bundle metadata out of an IPA without unpacking it.
     static func metadata(for url: URL) throws -> IPAMetadata {
         guard let archive = Archive(url: url, accessMode: .read) else {
-            throw err("\(url.lastPathComponent) is not a readable .ipa / zip archive.")
+            throw appFailure("\(url.lastPathComponent) is not a readable .ipa / zip archive.")
         }
 
         var infoEntry: Entry?
@@ -24,10 +24,10 @@ enum IPATool {
         }
 
         guard bundleEntries > 0 else {
-            throw err("\(url.lastPathComponent) has no Payload/ directory — it is not an app IPA.")
+            throw appFailure("\(url.lastPathComponent) has no Payload/ directory — it is not an app IPA.")
         }
         guard let infoEntry else {
-            throw err("\(url.lastPathComponent) has no Payload/*.app/Info.plist.")
+            throw appFailure("\(url.lastPathComponent) has no Payload/*.app/Info.plist.")
         }
 
         var payload = Data()
@@ -35,12 +35,12 @@ enum IPATool {
 
         guard let plist = try? PropertyListSerialization.propertyList(from: payload, options: [], format: nil),
               let info = plist as? [String: Any] else {
-            throw err("Info.plist inside \(url.lastPathComponent) is not a valid property list.")
+            throw appFailure("Info.plist inside \(url.lastPathComponent) is not a valid property list.")
         }
 
         let bundleID = (info["CFBundleIdentifier"] as? String) ?? ""
         guard !bundleID.isEmpty else {
-            throw err("Info.plist has no CFBundleIdentifier — cannot decrypt this bundle.")
+            throw appFailure("Info.plist has no CFBundleIdentifier — cannot decrypt this bundle.")
         }
 
         let appDirectory = infoEntry.path.replacingOccurrences(of: "/Info.plist", with: "")
@@ -108,7 +108,7 @@ enum IPATool {
         }
 
         guard let archive = Archive(url: source, accessMode: .read) else {
-            throw err("Cannot reopen \(source.lastPathComponent) for patching.")
+            throw appFailure("Cannot reopen \(source.lastPathComponent) for patching.")
         }
 
         let fileManager = FileManager.default
@@ -128,7 +128,7 @@ enum IPATool {
         let stagedPlist = staging.appendingPathComponent(metadata.infoPlistPath)
         var plistData = try Data(contentsOf: stagedPlist)
         guard var info = try PropertyListSerialization.propertyList(from: plistData, options: [], format: nil) as? [String: Any] else {
-            throw err("Staged Info.plist could not be parsed.")
+            throw appFailure("Staged Info.plist could not be parsed.")
         }
 
         if needsMinimumOS {
@@ -143,12 +143,12 @@ enum IPATool {
 
         try? fileManager.removeItem(at: destination)
         guard let output = Archive(url: destination, accessMode: .create) else {
-            throw err("Could not create \(destination.lastPathComponent).")
+            throw appFailure("Could not create \(destination.lastPathComponent).")
         }
 
         let rootPath = staging.standardizedFileURL.path
         guard let enumerator = fileManager.enumerator(atPath: rootPath) else {
-            throw err("Could not enumerate the staging directory.")
+            throw appFailure("Could not enumerate the staging directory.")
         }
 
         var relativePaths: [String] = []
@@ -191,7 +191,7 @@ enum IPATool {
     /// Confirms cryptid == 0 on every Mach-O in the produced IPA.
     static func verify(_ url: URL) throws -> VerifyReport {
         guard let archive = Archive(url: url, accessMode: .read) else {
-            throw err("Cannot open \(url.lastPathComponent) for verification.")
+            throw appFailure("Cannot open \(url.lastPathComponent) for verification.")
         }
 
         var report = VerifyReport()
