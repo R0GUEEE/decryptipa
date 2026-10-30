@@ -11,3 +11,4 @@ tools/logic-check/Sources/LogicCheck/Events.swift
 tools/logic-check/.build/
 tools/logic-check/Sources/LogicCheck/AppStoreLookup.swift
 tools/logic-check/Sources/LogicCheck/AppStoreClient.swift
+tools/logic-check/Sources/LogicCheck/Models.swift

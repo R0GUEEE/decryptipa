@@ -12,6 +12,7 @@ DEST="Sources/LogicCheck"
 
 cp "$APP_SOURCES/MachO.swift" "$DEST/MachO.swift"
 cp "$APP_SOURCES/Events.swift" "$DEST/Events.swift"
+cp "$APP_SOURCES/Models.swift" "$DEST/Models.swift"
 cp "$APP_SOURCES/AppStore/AppStoreLookup.swift" "$DEST/AppStoreLookup.swift"
 cp "$APP_SOURCES/AppStore/AppStoreClient.swift" "$DEST/AppStoreClient.swift"
 
