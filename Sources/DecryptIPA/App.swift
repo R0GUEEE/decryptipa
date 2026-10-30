@@ -12,40 +12,14 @@ struct DecryptIPAApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView()
+            RootScreen()
                 .environmentObject(deviceStore)
                 .environmentObject(library)
-                .onAppear { library.refresh() }
                 .onChange(of: scenePhase) { _, phase in
                     Diagnostics.breadcrumb("scenePhase: \(phase)")
                     if phase == .background { Diagnostics.breadcrumb("clean exit") }
                     Diagnostics.flush()
                 }
-        }
-    }
-}
-
-struct RootView: View {
-    @EnvironmentObject private var library: LibraryStore
-    @State private var selection = 0
-
-    var body: some View {
-        TabView(selection: $selection) {
-            // (selection changes are breadcrumbed below)
-            DecryptView()
-                .tabItem { Label("Decrypt", systemImage: "lock.open.display") }
-                .tag(0)
-
-            DevicesView()
-                .tabItem { Label("Devices", systemImage: "iphone.gen3") }
-                .tag(1)
-
-            LibraryView()
-                .tabItem { Label("Library", systemImage: "folder") }
-                .tag(2)
-        }
-        .onChange(of: selection) { _, value in
-            Diagnostics.breadcrumb("tab: \(value)")
         }
     }
 }

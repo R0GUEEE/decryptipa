@@ -646,6 +646,13 @@ final class AppStoreSession: ObservableObject {
         searchResults = []
     }
 
+    func deselectApp() {
+        app = nil
+        downloadedIPA = nil
+        ticket = nil
+        status = ""
+    }
+
     func lookUp(_ identifier: String) async {
         busy = true
         error = nil

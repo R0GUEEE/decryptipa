@@ -1,0 +1,358 @@
+import SwiftUI
+
+/// STEP 2 — Apple ID, two-factor and the Anisette provider that makes native
+/// App Store authentication possible.
+struct AccountSection: View {
+    @ObservedObject var session: AppStoreSession
+
+    @State private var email = ""
+    @State private var password = ""
+    @State private var remember = true
+    @State private var code = ""
+    @State private var showingSecret = false
+    @State private var confirmProvision = false
+    @State private var showingImport = false
+
+    var body: some View {
+        Card {
+            SectionHeader(
+                step: 2,
+                title: "Apple account",
+                subtitle: "Sign in once; the token is kept in the Keychain",
+                icon: "person.crop.circle.badge.checkmark",
+                state: session.account == nil ? (session.challenge == nil ? .idle : .warning) : .ready
+            )
+
+            accountBody
+            DividerLine()
+            anisetteBody
+        }
+        .onAppear {
+            if email.isEmpty { email = session.account?.email ?? "" }
+            if password.isEmpty { password = session.savedPassword }
+            Task { await session.refreshPublicAnisetteServers() }
+        }
+        .confirmationDialog(
+            "Provision Anisette with this server?",
+            isPresented: $confirmProvision,
+            titleVisibility: .visible
+        ) {
+            Button("Agree & set up") {
+                Task { await session.configureAutomaticAnisette() }
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            let host = URL(string: session.automaticAnisetteServer)?.host ?? session.automaticAnisetteServer
+            Text("The server at " + host + " participates in Apple's Anisette provisioning exchange and can observe the device identity and protocol traffic. Continue only if you trust it.")
+        }
+        .sheet(isPresented: $showingImport) {
+            ImportSessionSheet(session: session)
+        }
+    }
+
+    // MARK: Account
+
+    @ViewBuilder
+    private var accountBody: some View {
+        if let account = session.account {
+            VStack(spacing: 8) {
+                InfoRow(label: "Apple ID", value: account.email)
+                if !account.name.isEmpty { InfoRow(label: "Name", value: account.name) }
+                InfoRow(label: "Storefront", value: account.storeFront)
+                InfoRow(label: "Mode", value: session.usesAnisette ? "Native + 2FA" : "Classic sign-in")
+            }
+
+            HStack(spacing: 8) {
+                Button {
+                    Task { await session.beginSignIn(email: account.email, password: session.savedPassword, rememberPassword: true) }
+                } label: {
+                    Label("Refresh token", systemImage: "arrow.clockwise")
+                        .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.bordered)
+                .tint(Palette.accent)
+                .disabled(session.busy || session.savedPassword.isEmpty)
+
+                Button(role: .destructive) {
+                    session.signOut()
+                } label: {
+                    Label("Sign out", systemImage: "rectangle.portrait.and.arrow.right")
+                        .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.bordered)
+            }
+
+        } else if let challenge = session.challenge {
+            challengeBody(challenge)
+        } else {
+            credentialsBody
+        }
+    }
+
+    private var credentialsBody: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            FieldShell {
+                TextField("Apple ID", text: $email)
+                    .textContentType(.username)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .keyboardType(.emailAddress)
+                    .foregroundStyle(Palette.ink)
+            }
+
+            FieldShell {
+                HStack(spacing: 8) {
+                    Group {
+                        if showingSecret {
+                            TextField("Password", text: $password)
+                        } else {
+                            SecureField("Password", text: $password)
+                        }
+                    }
+                    .textContentType(.password)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .foregroundStyle(Palette.ink)
+
+                    Button {
+                        showingSecret.toggle()
+                    } label: {
+                        Image(systemName: showingSecret ? "eye.slash" : "eye")
+                            .font(.system(size: 13))
+                            .foregroundStyle(Palette.muted)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            Toggle(isOn: $remember) {
+                Text("Remember password in Keychain")
+                    .font(.caption)
+                    .foregroundStyle(Palette.muted)
+            }
+            .tint(Palette.accent)
+
+            PrimaryButton(
+                title: session.usesAnisette ? "Sign in with 2FA support" : "Sign in",
+                icon: "person.badge.key",
+                busy: session.busy,
+                enabled: !email.isEmpty && !password.isEmpty
+            ) {
+                Diagnostics.breadcrumb("Apple ID sign-in form submitted")
+                Task { await session.beginSignIn(email: email, password: password, rememberPassword: remember) }
+            }
+
+            HStack {
+                Button("Use an existing session") { showingImport = true }
+                    .font(.caption2.weight(.semibold))
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Palette.accent)
+                Spacer()
+                if session.busy, !session.status.isEmpty {
+                    Text(session.status).font(.caption2).foregroundStyle(Palette.muted).lineLimit(1)
+                }
+            }
+        }
+    }
+
+    private func challengeBody(_ challenge: TwoFactorChallenge) -> some View {
+        VStack(alignment: .leading, spacing: 11) {
+            Text(challenge.note)
+                .font(.caption)
+                .foregroundStyle(Palette.warning)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(spacing: 7) {
+                ForEach(challenge.options) { option in
+                    Button {
+                        session.selectOption(option.id)
+                        Task { await session.sendCode(option: option) }
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: option.kind == .sms ? "message.fill" : "iphone")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(Palette.accent)
+                                .frame(width: 26)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(option.title).font(.caption.weight(.semibold)).foregroundStyle(Palette.ink)
+                                Text(option.detail).font(.caption2).foregroundStyle(Palette.muted)
+                            }
+                            Spacer(minLength: 0)
+                            if session.selectedOptionID == option.id {
+                                Image(systemName: "checkmark.circle.fill").foregroundStyle(Palette.accent)
+                            }
+                        }
+                        .padding(10)
+                        .background(Palette.cardRaised, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            FieldShell {
+                TextField(String(repeating: "•", count: challenge.codeLength), text: $code)
+                    .keyboardType(.numberPad)
+                    .textContentType(.oneTimeCode)
+                    .font(.system(.title3, design: .monospaced))
+                    .foregroundStyle(Palette.ink)
+            }
+
+            PrimaryButton(
+                title: "Verify code",
+                icon: "checkmark.shield",
+                busy: session.busy,
+                enabled: code.trimmingCharacters(in: .whitespaces).count >= 4
+            ) {
+                Task { await session.verifyCode(code) }
+            }
+
+            HStack {
+                Button("Resend") { Task { await session.sendCode(option: session.selectedOption) } }
+                    .font(.caption2.weight(.semibold))
+                    .buttonStyle(.plain)
+                    .foregroundStyle(session.canResend ? Palette.accent : Palette.muted)
+                    .disabled(!session.canResend || session.busy)
+                Spacer()
+                Button("Start over") {
+                    code = ""
+                    session.cancelChallenge()
+                }
+                .font(.caption2.weight(.semibold))
+                .buttonStyle(.plain)
+                .foregroundStyle(Palette.muted)
+            }
+
+            EmptyNote(text: "Enter the 6-digit code Apple sent. SMS and trusted-device prompts are supported; Apple's current challenge has no email-code delivery.")
+        }
+    }
+
+    // MARK: Anisette
+
+    private var anisetteBody: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("ANISETTE")
+                    .font(.caption2.weight(.bold))
+                    .tracking(1.0)
+                    .foregroundStyle(Palette.muted)
+                Spacer()
+                StatusPill(
+                    text: session.automaticAnisetteReady ? "ready" : "not set up",
+                    tint: session.automaticAnisetteReady ? Palette.success : Palette.warning,
+                    symbol: session.automaticAnisetteReady ? "checkmark" : "exclamationmark"
+                )
+            }
+
+            HStack(spacing: 8) {
+                Menu {
+                    ForEach(session.anisetteServerOptions) { option in
+                        Button(option.name) {
+                            session.automaticAnisetteServer = option.url
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "server.rack").font(.system(size: 12))
+                        Text(currentServerName)
+                            .font(.caption.weight(.semibold))
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                        Image(systemName: "chevron.up.chevron.down").font(.system(size: 9))
+                    }
+                    .foregroundStyle(Palette.ink)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(Palette.cardRaised, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+
+                Button {
+                    Task { await session.refreshPublicAnisetteServers(force: true) }
+                } label: {
+                    if session.anisetteCatalogRefreshing {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: "arrow.clockwise").font(.system(size: 13, weight: .semibold))
+                    }
+                }
+                .buttonStyle(.bordered)
+                .tint(Palette.muted)
+            }
+
+            Text("Provider list: servers.sidestore.io · automatic failover across the public list")
+                .font(.caption2)
+                .foregroundStyle(Palette.muted)
+
+            HStack(spacing: 8) {
+                QuietButton(
+                    title: session.automaticAnisetteReady ? "Re-provision" : "Set up Anisette",
+                    icon: "wand.and.stars"
+                ) {
+                    confirmProvision = true
+                }
+
+                if session.automaticAnisetteReady {
+                    QuietButton(title: "Forget", icon: "trash") {
+                        session.removeAutomaticAnisette()
+                    }
+                }
+            }
+
+            if let error = session.error {
+                HStack(alignment: .top, spacing: 7) {
+                    Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 11))
+                    Text(error)
+                        .font(.caption2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .foregroundStyle(Palette.warning)
+            }
+        }
+    }
+
+    private var currentServerName: String {
+        session.anisetteServerOptions
+            .first(where: { $0.url == session.automaticAnisetteServer })?.name
+            ?? URL(string: session.automaticAnisetteServer)?.host
+            ?? "Choose server"
+    }
+}
+
+struct ImportSessionSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var session: AppStoreSession
+
+    @State private var dsid = ""
+    @State private var token = ""
+    @State private var storefront = "143441"
+    @State private var pod = ""
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Session") {
+                    TextField("dsPersonId / DSID", text: $dsid).keyboardType(.numberPad)
+                    TextField("passwordToken", text: $token)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    TextField("Storefront", text: $storefront).keyboardType(.numberPad)
+                    TextField("Pod (optional)", text: $pod).keyboardType(.numberPad)
+                }
+                Section {
+                    Button("Use this session") {
+                        if session.importSession(dsid: dsid, token: token, storefront: storefront, pod: pod) {
+                            dismiss()
+                        }
+                    }
+                    .disabled(dsid.isEmpty || token.isEmpty || storefront.isEmpty)
+                } footer: {
+                    Text("A token minted on a machine that can sign (ipatool, ipadecrypt) is accepted by Apple for licences and downloads.")
+                }
+            }
+            .navigationTitle("Existing session")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+            }
+        }
+    }
+}
