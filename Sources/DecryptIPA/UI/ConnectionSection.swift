@@ -128,6 +128,7 @@ struct ConnectionSection: View {
 
         do {
             let transport = try await SSHTransport.connect(profile: device, secrets: store.secrets(for: device))
+            defer { Task { await transport.close() } }
             let service = DeviceService(transport: transport)
             let probe = try await service.probe()
             let appinst = try await service.locateAppinst()
@@ -138,7 +139,6 @@ struct ConnectionSection: View {
             parts.append(appSync == nil ? "AppSync missing" : "AppSync ready")
             testSummary = parts.joined(separator: " · ")
             testFailed = appinst == nil || appSync == nil
-            await transport.close()
         } catch {
             testSummary = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
             testFailed = true

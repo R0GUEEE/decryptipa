@@ -64,6 +64,14 @@ struct AppSection: View {
             allowsMultipleSelection: false,
             onCompletion: handleImport
         )
+        .onChange(of: source) { _, newSource in
+            importError = nil
+            if newSource == .file, let url = inputURL,
+               !FileManager.default.fileExists(atPath: url.path) {
+                inputURL = nil
+                inputMetadata = nil
+            }
+        }
         .onChange(of: session.downloadedIPA) { _, url in
             guard let url else { return }
             inputURL = url
