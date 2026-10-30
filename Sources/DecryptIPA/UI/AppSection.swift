@@ -393,7 +393,7 @@ struct AppSection: View {
                         .font(.system(size: 11))
                     Text(report.ok
                          ? String(report.plaintext) + "/" + String(report.checked) + " Mach-O images are plaintext"
-                         : String(report.stillEncrypted.count) + " images still encrypted")
+                         : String(report.stillEncrypted.count) + " encrypted · " + String(report.zeroFilled.count) + " zero-filled")
                         .font(.caption2)
                 }
                 .foregroundStyle(report.ok ? Palette.success : Palette.warning)

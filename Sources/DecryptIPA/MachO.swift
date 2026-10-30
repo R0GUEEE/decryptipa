@@ -111,6 +111,30 @@ enum MachOAnalyzer {
         return encrypted ? .encrypted : .plaintext
     }
 
+
+    /// Offset and size of the FairPlay crypt region for a thin 64-bit image.
+    /// Used to prove that a `cryptid == 0` file actually contains plaintext
+    /// rather than a zero fill.
+    static func cryptRange(firstBytes bytes: [UInt8], offset: Int = 0) -> (offset: Int, size: Int)? {
+        guard offset + 32 <= bytes.count else { return nil }
+        guard readUInt32(bytes, offset, littleEndian: true) == 0xFEEDFACF else { return nil }
+        let ncmds = Int(readUInt32(bytes, offset + 16, littleEndian: true))
+        var cursor = offset + 32
+        for _ in 0..<max(0, min(ncmds, 4096)) {
+            guard cursor + 8 <= bytes.count else { break }
+            let cmd = readUInt32(bytes, cursor, littleEndian: true)
+            let size = Int(readUInt32(bytes, cursor + 4, littleEndian: true))
+            guard size >= 8 else { break }
+            if cmd == 0x2C, cursor + 20 <= bytes.count {
+                let cryptOff = Int(readUInt32(bytes, cursor + 8, littleEndian: true))
+                let cryptSize = Int(readUInt32(bytes, cursor + 12, littleEndian: true))
+                if cryptSize > 0 { return (offset + cryptOff, cryptSize) }
+            }
+            cursor += size
+        }
+        return nil
+    }
+
     private static func readUInt32(_ bytes: [UInt8], _ offset: Int, littleEndian: Bool) -> UInt32 {
         guard offset + 4 <= bytes.count else { return 0 }
         let b0 = UInt32(bytes[offset])

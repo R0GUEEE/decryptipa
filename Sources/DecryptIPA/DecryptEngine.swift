@@ -268,6 +268,20 @@ final class DecryptEngine: ObservableObject {
             append("Bundle \(metadata.bundleID) \(metadata.version) (\(metadata.build)) · minOS \(metadata.minimumOS) · \(ByteCountFormatter.string(fromByteCount: metadata.fileSize, countStyle: .file))", .info)
         }
 
+        // Mirror ipadecrypt's ErrDeviceFamilyMismatch: fail before the upload
+        // instead of letting appinst reject the bundle minutes later.
+        if let metadata, probe.deviceFamily != 0, !metadata.deviceFamily.isEmpty,
+           !metadata.deviceFamily.contains(probe.deviceFamily) {
+            let supported = metadata.deviceFamily.map(String.init).joined(separator: ", ")
+            if request.options.expandDeviceFamily {
+                append("IPA supports device family [" + supported + "]; expanding for " + probe.deviceFamilyName + ".", .warn)
+            } else {
+                throw appFailure("This IPA supports device family [" + supported + "] but the device is " +
+                                 probe.deviceFamilyName + " (" + String(probe.deviceFamily) + "). " +
+                                 "Enable \"Expand device family if needed\" to install it anyway.")
+            }
+        }
+
         let bundleID = metadata?.bundleID ?? request.bundleIDOverride ?? ""
         guard !bundleID.isEmpty else {
             throw appFailure("No bundle identifier available — pick an IPA or type the installed app's bundle id.")
@@ -452,9 +466,12 @@ final class DecryptEngine: ObservableObject {
             if report.ok {
                 append("Verified: \(report.plaintext)/\(report.checked) Mach-O images are plaintext.", .success)
             } else {
-                append("Verification: \(report.stillEncrypted.count) still encrypted, \(report.unreadable.count) unreadable.", .warn)
+                append("Verification: \(report.stillEncrypted.count) still encrypted, \(report.zeroFilled.count) zero-filled, \(report.unreadable.count) unreadable.", .warn)
                 for name in report.stillEncrypted.prefix(6) {
                     append("  encrypted: \(name)", .warn)
+                }
+                for name in report.zeroFilled.prefix(6) {
+                    append("  zero-filled: \(name)", .warn)
                 }
             }
         }

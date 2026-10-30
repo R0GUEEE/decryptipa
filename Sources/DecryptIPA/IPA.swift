@@ -197,9 +197,10 @@ enum IPATool {
         var checked = 0
         var plaintext = 0
         var stillEncrypted: [String] = []
+        var zeroFilled: [String] = []
         var unreadable: [String] = []
 
-        var ok: Bool { checked > 0 && stillEncrypted.isEmpty }
+        var ok: Bool { checked > 0 && stillEncrypted.isEmpty && zeroFilled.isEmpty }
     }
 
     /// Confirms cryptid == 0 on every Mach-O in the produced IPA.
@@ -232,13 +233,54 @@ enum IPATool {
 
             switch status {
             case .plaintext:
-                report.plaintext += 1
+                // cryptid 0 is not proof of decryption: a dump that never fired
+                // decrypt-on-fault leaves cryptid 0 over a zero fill. Read the
+                // crypt region (bounded) and look for the tell.
+                if isCryptRegionZeroFilled(archive: archive, entry: entry, head: head) {
+                    report.zeroFilled.append(entry.path)
+                } else {
+                    report.plaintext += 1
+                }
             case .encrypted:
                 report.stillEncrypted.append(entry.path)
             }
         }
 
         return report
+    }
+
+    /// Bounded look at the FairPlay crypt region. Only images whose header we
+    /// could parse are considered; anything beyond 32 MB of crypt payload is
+    /// sampled from the start rather than read whole.
+    private static func isCryptRegionZeroFilled(
+        archive: Archive,
+        entry: Entry,
+        head: Data
+    ) -> Bool {
+        let bytes = [UInt8](head)
+        guard let range = MachOAnalyzer.cryptRange(firstBytes: bytes), range.size > 0 else {
+            return false
+        }
+        guard Int64(range.offset) < entry.uncompressedSize else { return false }
+
+        let limit = min(range.size, 8 << 20)
+        var region = Data()
+        _ = try? archive.extract(entry, bufferSize: 256 * 1024, skipCRC32: true) { chunk in
+            region.append(chunk)
+            if region.count >= range.offset + limit { throw VerificationStop.done }
+        }
+
+        guard region.count >= range.offset + 4096 else { return false }
+        let start = range.offset
+        let end = min(region.count, start + limit)
+        guard start < end else { return false }
+
+        var index = start
+        while index < end {
+            if region[index] != 0 { return false }
+            index += 1
+        }
+        return true
     }
 
     private enum VerificationStop: Error {

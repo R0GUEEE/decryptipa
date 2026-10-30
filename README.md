@@ -272,6 +272,13 @@ Two gates run in CI:
   executable's `Info.plist` carries `CFBundleIdentifier` and
   `NSLocalNetworkUsageDescription`.
 
+## Porting notes
+
+`docs/IPADECRYPT-PORT.md` maps every ipadecrypt package onto this app,
+separates what runs on the device from what needs Apple's framework
+emulation, and lays out the remaining work (host-side assembly, offline
+decryptor, credential minting).
+
 ## Layout
 
 ```
