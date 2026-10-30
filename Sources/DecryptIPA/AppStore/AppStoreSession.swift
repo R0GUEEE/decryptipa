@@ -273,6 +273,10 @@ final class AppStoreSession: ObservableObject {
         }
     }
 
+    func selectOption(_ id: String) {
+        selectedOptionID = id
+    }
+
     func cancelChallenge() {
         challenge = nil
         selectedOptionID = nil

@@ -348,7 +348,7 @@ struct SignInView: View {
         Section {
             ForEach(challenge.options) { option in
                 Button {
-                    session.selectedOptionID = option.id
+                    session.selectOption(option.id)
                     Task { await session.sendCode(option: option) }
                 } label: {
                     HStack {
