@@ -34,7 +34,7 @@ struct DecryptView: View {
     @State private var showingLog = false
     @State private var showingDevices = false
     @State private var showingAppStore = false
-    @State private var showingAdvanced = false
+    @State private var showingDiagnostics = false
 
     private let ink = Color(red: 0.12, green: 0.17, blue: 0.24)
     private let canvas = Color(red: 0.95, green: 0.96, blue: 0.98)
@@ -63,6 +63,9 @@ struct DecryptView: View {
             .scrollIndicators(.hidden)
             .navigationTitle("DecryptIPA")
             .navigationBarTitleDisplayMode(.inline)
+            .tint(accent)
+            .toolbarBackground(canvas, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button { showingDevices = true } label: {
@@ -71,15 +74,29 @@ struct DecryptView: View {
                     .accessibilityLabel("Devices")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button { showingLog = true } label: {
-                        Image(systemName: "text.alignleft")
+                    Menu {
+                        Button { showingDevices = true } label: {
+                            Label("Manage devices", systemImage: "iphone.gen3")
+                        }
+                        Button { showingLog = true } label: {
+                            Label("Job log", systemImage: "text.alignleft")
+                        }
+                        .disabled(engine.log.isEmpty)
+                        Divider()
+                        Button { showingDiagnostics = true } label: {
+                            Label("Diagnostics & crash logs", systemImage: "stethoscope")
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                            .font(.system(size: 20, weight: .medium))
+                            .foregroundStyle(accent)
                     }
-                    .disabled(engine.log.isEmpty)
-                    .accessibilityLabel("Job log")
+                    .accessibilityLabel("More actions")
                 }
             }
             .sheet(isPresented: $showingLog) { LogSheet(engine: engine) }
             .sheet(isPresented: $showingDevices) { DevicesView() }
+            .sheet(isPresented: $showingDiagnostics) { DiagnosticsView() }
             .sheet(isPresented: $showingAppStore) {
                 if let session = appStoreSession {
                     AppStoreView(
@@ -115,6 +132,7 @@ struct DecryptView: View {
                 if phase == .done { library.refresh() }
             }
         }
+        .preferredColorScheme(.light)
     }
 
     // MARK: Header
@@ -575,7 +593,7 @@ private struct EmptyHint: View {
 
 private extension View {
     func cardSurface() -> some View {
-        background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .background(Color.white, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
                     .strokeBorder(Color.primary.opacity(0.035), lineWidth: 1)
