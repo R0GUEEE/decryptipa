@@ -203,6 +203,14 @@ Library → **⋯ → Diagnostics & crash logs** (or `Documents/Logs`):
 * `crash-signal.txt` — appended by the `SIGABRT/SEGV/BUS/ILL/FPE/TRAP` handlers,
   which only call `write(2)` on a descriptor opened at launch.
 
+Every run is also archived: on launch the previous `last-run.txt` moves to
+`Logs/runs/run-<date>.txt` (ten kept), so relaunching after a crash cannot
+destroy the trail you need. Diagnostics lists them under **Previous runs**, with
+the last recorded step under each name, and a run that disappeared without a
+`scenePhase: background`/`clean exit` line gets a `crash-suspected-*.txt` note —
+that is the signature of a watchdog kill or jetsam eviction rather than a Swift
+exception.
+
 "Share everything" exports all of it in one paste.
 
 ## Verification
