@@ -332,6 +332,7 @@ struct AccountSection: View {
             }
 
             if session.errorNeedsAttestation {
+                EmptyNote(text: "Your Apple ID and password are not the problem: Apple rejects the request before it reads them. The quickest route is to install the app from the App Store on the jailbroken device, then choose it under Installed in step 3.")
                 QuietButton(title: "Import a session token", icon: "square.and.arrow.down") {
                     showingImport = true
                 }
@@ -384,6 +385,25 @@ struct ImportSessionSheet: View {
                     .disabled(dsid.isEmpty || token.isEmpty || storefront.isEmpty)
                 } footer: {
                     Text("A token minted on a machine that can sign (ipatool, ipadecrypt) is accepted by Apple for licences and downloads.")
+                }
+
+                Section {
+                    DisclosureGroup("Where do these values come from?") {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("ipadecrypt, after `ipadecrypt bootstrap` has signed in, writes them to ~/.ipadecrypt/config.json:")
+                                .font(.caption)
+                            Text("cat ~/.ipadecrypt/config.json")
+                                .font(.caption.monospaced())
+                            Text("Map apple.passwordToken → passwordToken, apple.directoryServicesIdentifier → DSID, apple.storeFront → Storefront, apple.pod → Pod.")
+                                .font(.caption)
+                            Divider()
+                            Text("ipatool stores the same material in the “ipatool” login keychain item after `ipatool auth login -e you@example.com`; open Keychain Access on macOS, search ipatool, and copy the fields.")
+                                .font(.caption)
+                        }
+                        .foregroundStyle(Palette.muted)
+                    }
+                } footer: {
+                    Text("Treat the token like a password: anyone holding it can download apps for your account. It is kept in the iOS Keychain only.")
                 }
             }
             .navigationTitle("Existing session")
